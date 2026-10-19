@@ -107,7 +107,16 @@ export MEDIX_LLM_BASE_URL="https://api.openai.com/v1"
 python knowledge/scripts/import_documents.py knowledge/data/documents
 ```
 
-### 5. 启动全栈 MVP
+### 5. 配置 Codex 提交信息钩子
+
+```bash
+git config core.hooksPath .githooks
+chmod +x .githooks/prepare-commit-msg
+```
+
+执行不带 `-m` 的 `git commit` 时，钩子会根据暂存区 diff 调用 Codex 生成中文候选提交信息，随后打开 Git 编辑器供人工确认和修改。
+
+### 6. 启动全栈 MVP
 
 项目现在提供 FastAPI 后端和 Vue 3 前端工作台。先配置 `MEDIX_LLM_API_KEY`，然后执行：
 

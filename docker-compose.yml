@@ -11,6 +11,10 @@ services:
       MEDIX_MILVUS_DB_PATH: /app/knowledge/data/milvus_lite.db
       MEDIX_REDIS_URL: redis://redis:6379/0
       MEDIX_EMBEDDING_MODEL: ${MEDIX_EMBEDDING_MODEL:-BAAI/bge-small-zh-v1.5}
+      MEDIX_EMBEDDING_BATCH_SIZE: ${MEDIX_EMBEDDING_BATCH_SIZE:-16}
+      MEDIX_PARSE_CONCURRENCY: ${MEDIX_PARSE_CONCURRENCY:-2}
+      MEDIX_CHUNK_MAX_TOKENS: ${MEDIX_CHUNK_MAX_TOKENS:-384}
+      MEDIX_CHUNK_OVERLAP_TOKENS: ${MEDIX_CHUNK_OVERLAP_TOKENS:-48}
       MEDIX_KB_SOURCE_TYPES: ${MEDIX_KB_SOURCE_TYPES:-clinical_guideline,drug_label,textbook,research,standard,document,unclassified}
       MEDIX_RETRIEVAL_PER_SOURCE: ${MEDIX_RETRIEVAL_PER_SOURCE:-3}
       HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}

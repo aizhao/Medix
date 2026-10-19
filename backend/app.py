@@ -9,6 +9,8 @@ import shutil
 import hashlib
 import mimetypes
 import re
+import os
+import threading
 from pathlib import Path
 from typing import Any, Dict
 
@@ -24,6 +26,20 @@ from .storage import SQLiteStore
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_ROOT = PROJECT_ROOT / "frontend"
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
+# Parsing large PDFs concurrently is memory-heavy, while Milvus Lite permits a
+# single writer for one database file. Keep the HTTP endpoints responsive but
+# bound the actual background work inside the process.
+_PARSE_LIMITER = threading.Semaphore(_positive_int_env("MEDIX_PARSE_CONCURRENCY", 2))
+_INDEX_JOB_LOCK = threading.Lock()
 
 app = FastAPI(
     title="MediX Medical Evidence Assistant",
@@ -500,7 +516,7 @@ async def parse_document_endpoint(document_id: int, request: Request, background
     if document["status"] in {"processing", "indexing"}:
         raise HTTPException(status_code=409, detail="document is already processing")
     job_id = store.create_job(document_id, "parse")
-    store.update_document_status(document_id, "processing", progress=0, current_stage="parsing", error_code="", error_message="", started_at=store._now(), finished_at=None)
+    store.update_document_status(document_id, "processing", progress=0, current_stage="parse_queued", error_code="", error_message="", started_at=None, finished_at=None)
     background_tasks.add_task(_parse_document_job, store, document_id, job_id, document["path"])
     return {"status": "processing", "document_id": document_id, "job_id": job_id}
 
@@ -521,7 +537,7 @@ async def reparse_document(document_id: int, request: Request, background_tasks:
     if document["status"] in {"processing", "indexing"}:
         raise HTTPException(status_code=409, detail="document is already processing")
     job_id = store.create_job(document_id, "reparse")
-    store.update_document_status(document_id, "processing", progress=0, current_stage="parsing", error_code="", error_message="", started_at=store._now(), finished_at=None)
+    store.update_document_status(document_id, "processing", progress=0, current_stage="parse_queued", error_code="", error_message="", started_at=None, finished_at=None)
     background_tasks.add_task(_parse_document_job, store, document_id, job_id, document["path"], True)
     return {"status": "processing", "document_id": document_id, "job_id": job_id}
 
@@ -536,7 +552,7 @@ async def index_document(document_id: int, request: Request, background_tasks: B
     if document["status"] not in {"parsed", "indexed", "failed", "interrupted"} or not chunks:
         raise HTTPException(status_code=409, detail="document must be parsed successfully before indexing")
     job_id = store.create_job(document_id, "index")
-    store.update_document_status(document_id, "indexing", progress=0, current_stage="embedding", error_code="", error_message="", started_at=store._now(), finished_at=None)
+    store.update_document_status(document_id, "indexing", progress=0, current_stage="index_queued", error_code="", error_message="", started_at=None, finished_at=None)
     background_tasks.add_task(_index_document_job, store, document_id, job_id)
     return {"status": "indexing", "document_id": document_id, "job_id": job_id}
 
@@ -564,6 +580,11 @@ def _job_error(exc: Exception) -> tuple[str, str]:
 
 
 def _parse_document_job(store: SQLiteStore, document_id: int, job_id: str, path: str, bump_version: bool = False) -> None:
+    with _PARSE_LIMITER:
+        _run_parse_document_job(store, document_id, job_id, path, bump_version)
+
+
+def _run_parse_document_job(store: SQLiteStore, document_id: int, job_id: str, path: str, bump_version: bool = False) -> None:
     """Durable parse/chunk job. Parsed chunks are persisted before indexing."""
     try:
         from knowledge.parser import parse_document
@@ -605,14 +626,62 @@ def _parse_document_job(store: SQLiteStore, document_id: int, job_id: str, path:
 
 
 def _index_document_job(store: SQLiteStore, document_id: int, job_id: str) -> None:
+    # One process-wide writer prevents duplicate model loads and Milvus Lite
+    # file-lock contention when the UI submits a large batch.
+    with _INDEX_JOB_LOCK:
+        _run_index_document_job(store, document_id, job_id)
+
+
+def _run_index_document_job(store: SQLiteStore, document_id: int, job_id: str) -> None:
     """Background embedding/index job; errors remain visible and retryable."""
     try:
         from knowledge.milvus_kb import MedicalKnowledgeBase
+        from knowledge.chunking import DEFAULT_POLICY, TokenCounter, split_table_text, split_text
+        from dataclasses import replace
 
         chunks = store.list_chunks(document_id)
         if not chunks:
             raise ValueError("没有可索引的解析块")
         store.update_job(job_id, status="running", progress=10, stage="embedding", started_at=store._now())
+        kb = MedicalKnowledgeBase()
+        tokenizer = getattr(kb.embedding_model, "tokenizer", None)
+        model_limit = int(getattr(kb.embedding_model, "max_seq_length", 512) or 512)
+        safe_limit = max(32, min(DEFAULT_POLICY.max_tokens, model_limit - 2))
+        safe_policy = replace(
+            DEFAULT_POLICY,
+            max_tokens=safe_limit,
+            overlap_tokens=min(DEFAULT_POLICY.overlap_tokens, max(0, safe_limit // 4)),
+        )
+        counter = TokenCounter(tokenizer=tokenizer)
+        normalized_chunks = []
+        changed = False
+        for chunk in chunks:
+            content = str(chunk.get("content") or "")
+            metadata = dict(chunk.get("metadata") or {})
+            if counter.count(content) <= safe_limit:
+                normalized_chunks.append({"content": content, "metadata": metadata})
+                continue
+            splitter = split_table_text if metadata.get("is_table") else split_text
+            parts = splitter(content, safe_policy, tokenizer=tokenizer)
+            if not parts:
+                raise ValueError(f"切片 {chunk['chunk_index']} 超限且无法重新切分")
+            changed = True
+            for part_index, part in enumerate(parts):
+                if counter.count(part) > safe_limit:
+                    raise ValueError(f"切片 {chunk['chunk_index']} 重新切分后仍超过 {safe_limit} tokens")
+                part_metadata = dict(metadata)
+                part_metadata.update({
+                    "parent_chunk_index": int(chunk["chunk_index"]),
+                    "embedding_rechunked": True,
+                    "embedding_part": part_index,
+                    "embedding_parts": len(parts),
+                })
+                normalized_chunks.append({"content": part, "metadata": part_metadata})
+        if changed:
+            store.replace_chunks(document_id, normalized_chunks)
+            store.update_document(document_id, total_chunks=len(normalized_chunks), indexed_chunks=0)
+            chunks = store.list_chunks(document_id)
+
         documents = []
         document_version = int((store.get_document(document_id) or {}).get("version") or 1)
         for chunk in chunks:
@@ -622,7 +691,6 @@ def _index_document_job(store: SQLiteStore, document_id: int, job_id: str) -> No
             metadata["version"] = document_version
             documents.append({"id": f"document-{document_id}-chunk-{chunk['chunk_index']}", "content": chunk["content"], "metadata": metadata})
         store.update_job(job_id, progress=40, stage="milvus_insert")
-        kb = MedicalKnowledgeBase()
         # Auto-ID collections need an application-level cleanup before retry;
         # otherwise a partially failed job could create duplicate vectors.
         kb.delete_by_document_record_id(document_id)

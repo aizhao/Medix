@@ -11,6 +11,7 @@
 import json
 import os
 import re
+import threading
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from loguru import logger
@@ -44,14 +45,30 @@ class MedicalKnowledgeBase:
     """医学知识库"""
 
     _instance = None
+    _instance_lock = threading.Lock()
+    _initialization_lock = threading.Lock()
 
     def __new__(cls, *args, **kwargs):
         """实现单例模式"""
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
+        with cls._instance_lock:
+            if cls._instance is None:
+                cls._instance = super().__new__(cls)
         return cls._instance
 
     def __init__(
+        self,
+        db_path: str = "./knowledge/data/milvus_lite.db",
+        collection_name: str = "medical_knowledge",
+        embedding_model: str = "BAAI/bge-small-zh-v1.5"
+    ):
+        if hasattr(self, '_initialized'):
+            return
+        with self._initialization_lock:
+            if hasattr(self, '_initialized'):
+                return
+            self._initialize(db_path, collection_name, embedding_model)
+
+    def _initialize(
         self,
         db_path: str = "./knowledge/data/milvus_lite.db",
         collection_name: str = "medical_knowledge",
@@ -65,10 +82,6 @@ class MedicalKnowledgeBase:
             collection_name: Collection 名称
             embedding_model: Embedding 模型名称或本地路径
         """
-        # 防止重复初始化
-        if hasattr(self, '_initialized'):
-            return
-
         self.db_path = os.getenv("MEDIX_MILVUS_DB_PATH", db_path)
         self.collection_name = collection_name
         self.embedding_model_name = os.getenv("MEDIX_EMBEDDING_MODEL", embedding_model)
@@ -193,7 +206,12 @@ class MedicalKnowledgeBase:
 
         # 向量化
         contents = [chunk["content"] for chunk in all_chunks]
-        vectors = self.embedding_model.encode(contents, show_progress_bar=True)
+        batch_size = max(1, int(os.getenv("MEDIX_EMBEDDING_BATCH_SIZE", "16")))
+        vectors = self.embedding_model.encode(
+            contents,
+            batch_size=batch_size,
+            show_progress_bar=False,
+        )
 
         # 准备数据
         data = []

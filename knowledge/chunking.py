@@ -52,7 +52,10 @@ class TokenCounter:
         if not text:
             return []
         if self.tokenizer is not None:
-            return list(self.tokenizer.encode(text, add_special_tokens=False))
+            # We intentionally inspect long input before splitting it. Disable
+            # Transformers' misleading "running through the model" warning;
+            # no model inference happens in this counting step.
+            return list(self.tokenizer.encode(text, add_special_tokens=False, verbose=False))
         # 保守估算：中文/标点大致按字符计，连续 ASCII 单词按一个 token 计。
         return re.findall(r"[\u4e00-\u9fff]|\w+|[^\w\s]", text)
 
@@ -152,6 +155,11 @@ def split_text(
                     break
                 overlap.insert(0, item)
                 overlap_count += item_count
+            # The next semantic unit may itself be close to max_tokens. In
+            # that case carrying overlap would recreate an oversized chunk.
+            if overlap_count + (1 if overlap else 0) + unit_tokens > policy.max_tokens:
+                overlap = []
+                overlap_count = 0
             current = overlap
             current_tokens = overlap_count
 
@@ -167,6 +175,9 @@ def split_text(
                     break
                 overlap.insert(0, item)
                 overlap_count += item_count
+            if overlap_count + (1 if overlap else 0) + unit_tokens > policy.max_tokens:
+                overlap = []
+                overlap_count = 0
             current = overlap
             current_tokens = overlap_count
 
@@ -187,6 +198,10 @@ def split_table_text(text: str, policy: ChunkPolicy = DEFAULT_POLICY, tokenizer:
     counter = TokenCounter(tokenizer=tokenizer)
     header_text = "\n".join(header)
     header_tokens = counter.count(header_text)
+    # A malformed/flattened table can contain a single row longer than the
+    # model context. The general splitter hard-caps such rows safely.
+    if header_tokens >= policy.max_tokens or any(counter.count(row) >= policy.max_tokens for row in rows):
+        return split_text(text, policy, tokenizer=tokenizer, table=True)
     chunks: List[str] = []
     current = list(header)
     current_tokens = header_tokens

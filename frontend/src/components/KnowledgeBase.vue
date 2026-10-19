@@ -195,7 +195,7 @@ function statusLabel(status) {
   return ({ uploaded: '待解析', processing: '解析切片中', parsed: '待向量化', indexing: '向量化中', indexed: '可检索', failed: '处理失败', interrupted: '任务中断' })[status] || status
 }
 function stageLabel(stage) {
-  return ({ uploaded: '等待处理', parsing: '读取和解析内容', chunking: '生成逻辑切片', parsed: '切片已保存', embedding: '生成语义向量', milvus_insert: '写入向量库', indexed: '处理完成', parse_failed: '解析失败', index_failed: '向量化失败' })[stage] || stage || '等待处理'
+  return ({ uploaded: '等待处理', parse_queued: '等待解析队列', parsing: '读取和解析内容', chunking: '生成逻辑切片', parsed: '切片已保存', index_queued: '等待向量化队列', embedding: '生成语义向量', milvus_insert: '写入向量库', indexed: '处理完成', parse_failed: '解析失败', index_failed: '向量化失败' })[stage] || stage || '等待处理'
 }
 function categoryLabel(value) { return categories.find(item => item[0] === value)?.[1] || value }
 function fileKind(doc) { const name = doc.filename?.toLowerCase() || ''; return name.endsWith('.pdf') ? 'PDF' : /\.(docx?)$/.test(name) ? 'DOC' : /\.(xlsx?|xlsm)$/.test(name) ? 'XLS' : 'TXT' }
