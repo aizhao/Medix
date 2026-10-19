@@ -63,6 +63,51 @@ class TokenCounter:
         return len(self.encode(text))
 
 
+def _hard_split_text(text: str, counter: TokenCounter, policy: ChunkPolicy) -> List[str]:
+    """Split by token ids and verify decoded pieces against the real tokenizer.
+
+    ``decode(encode(text))`` is not token-count preserving for malformed PDF
+    text such as ``(cid:83)`` sequences.  A nominal 384-id window can become
+    386 tokens after decoding, so every window is shrunk until re-encoding is
+    demonstrably safe for the embedding model.
+    """
+    ids = counter.encode(text)
+    if len(ids) <= policy.max_tokens:
+        return [text.strip()] if text.strip() else []
+
+    pieces: List[str] = []
+    start = 0
+    while start < len(ids):
+        end = min(len(ids), start + policy.max_tokens)
+        while end > start:
+            piece_ids = ids[start:end]
+            if counter.tokenizer is not None:
+                piece = counter.tokenizer.decode(piece_ids, skip_special_tokens=True).strip()
+            else:
+                piece = "".join(piece_ids).strip()
+            if piece and counter.count(piece) <= policy.max_tokens:
+                break
+            end -= 1
+        if end <= start:
+            raise ValueError("tokenizer 无法生成模型长度范围内的切片")
+        pieces.append(piece)
+        if end >= len(ids):
+            break
+        overlap = min(policy.overlap_tokens, max(0, end - start - 1))
+        start = end - overlap
+    return pieces
+
+
+def _enforce_token_limit(chunks: List[str], counter: TokenCounter, policy: ChunkPolicy) -> List[str]:
+    safe: List[str] = []
+    for chunk in chunks:
+        if counter.count(chunk) <= policy.max_tokens:
+            safe.append(chunk)
+        else:
+            safe.extend(_hard_split_text(chunk, counter, policy))
+    return safe
+
+
 def _units(text: str, table: bool = False) -> List[str]:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if table:
@@ -124,17 +169,7 @@ def split_text(
         if unit_tokens > policy.max_tokens:
             # 单句/单行过长时才使用 token 窗口硬切。
             flush()
-            ids = counter.encode(unit)
-            step = max(1, policy.max_tokens - policy.overlap_tokens)
-            for start in range(0, len(ids), step):
-                piece_ids = ids[start:start + policy.max_tokens]
-                if counter.tokenizer is not None:
-                    piece = counter.tokenizer.decode(piece_ids, skip_special_tokens=True)
-                else:
-                    # fallback 模式下 ids 是字符串 token，无法完美还原，但可保持可读性。
-                    piece = "".join(piece_ids)
-                if piece.strip():
-                    chunks.append(piece.strip())
+            chunks.extend(_hard_split_text(unit, counter, policy))
             continue
 
         separator_tokens = 1 if current else 0
@@ -185,7 +220,7 @@ def split_text(
         current_tokens += separator_tokens + unit_tokens
 
     flush()
-    return chunks
+    return _enforce_token_limit(chunks, counter, policy)
 
 
 def split_table_text(text: str, policy: ChunkPolicy = DEFAULT_POLICY, tokenizer: Any = None) -> List[str]:
@@ -219,4 +254,4 @@ def split_table_text(text: str, policy: ChunkPolicy = DEFAULT_POLICY, tokenizer:
         current_tokens += 1 + row_tokens
     if len(current) > 2 or not chunks:
         chunks.append("\n".join(current))
-    return chunks
+    return _enforce_token_limit(chunks, counter, policy)

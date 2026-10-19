@@ -45,6 +45,23 @@ class ChunkingSafetyTests(unittest.TestCase):
         counter = TokenCounter(tokenizer=None)
         self.assertTrue(all(counter.count(chunk) <= policy.max_tokens for chunk in chunks))
 
+    def test_decode_expansion_is_shrunk_to_real_model_limit(self):
+        class ExpandingDecodeTokenizer:
+            def encode(self, text, **kwargs):
+                # Decoded spaces become additional tokens when encoded again,
+                # matching the behaviour seen in malformed PDF CID text.
+                return [char for char in text if char != " "] + ["space"] * text.count(" ")
+
+            def decode(self, ids, **kwargs):
+                return " ".join(str(token) for token in ids)
+
+        tokenizer = ExpandingDecodeTokenizer()
+        policy = ChunkPolicy(max_tokens=16, overlap_tokens=2, min_tokens=4)
+        chunks = split_text("abcdefghijklmnopqrstuvwx", policy=policy, tokenizer=tokenizer)
+        counter = TokenCounter(tokenizer=tokenizer)
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(counter.count(chunk) <= policy.max_tokens for chunk in chunks))
+
 
 if __name__ == "__main__":
     unittest.main()
