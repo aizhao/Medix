@@ -1,11 +1,20 @@
 <script setup>
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import UiIcon from './ui/UiIcon.vue'
 
 const emit = defineEmits(['notify'])
 
 const documents = ref([])
 const stats = ref({})
 const loading = ref(true)
+const loadError = ref('')
+const page = ref(1)
+const pageSize = 12
+const chunksBusy = ref(false)
+const chunksError = ref('')
+let chunksRequest = 0
+let knowledgeRequest = 0
+const actionIds = ref([])
 const uploadBusy = ref(false)
 const selectedIds = ref([])
 const search = ref('')
@@ -41,6 +50,10 @@ const filteredDocuments = computed(() => {
   return documents.value.filter(doc => !keyword || [doc.filename, doc.category, doc.publisher, doc.external_id, doc.corpus_id, ...(doc.tags || [])].join(' ').toLowerCase().includes(keyword))
 })
 const allSelected = computed(() => filteredDocuments.value.length > 0 && filteredDocuments.value.every(doc => selectedIds.value.includes(doc.id)))
+const pageCount = computed(() => Math.max(1, Math.ceil(filteredDocuments.value.length / pageSize)))
+const pagedDocuments = computed(() => filteredDocuments.value.slice((page.value - 1) * pageSize, page.value * pageSize))
+watch([search, statusFilter, categoryFilter], () => { page.value = 1 })
+watch(pageCount, count => { page.value = Math.min(page.value, count) })
 const processingCount = computed(() => (stats.value.processing || 0) + (stats.value.indexing || 0))
 
 async function api(path, options = {}) {
@@ -56,6 +69,7 @@ async function api(path, options = {}) {
 function notify(message, type = 'success') { emit('notify', { message, type }) }
 
 async function loadKnowledge(silent = false) {
+  const request = ++knowledgeRequest
   if (!silent) loading.value = true
   try {
     const query = new URLSearchParams()
@@ -65,12 +79,14 @@ async function loadKnowledge(silent = false) {
       api(`/api/v1/knowledge/documents${query.toString() ? `?${query}` : ''}`),
       api('/api/v1/knowledge/stats'),
     ])
+    if (request !== knowledgeRequest) return
+    loadError.value = ''
     documents.value = items
     stats.value = summary
     selectedIds.value = selectedIds.value.filter(id => items.some(doc => doc.id === id))
   } catch (error) {
-    notify(error.message, 'error')
-  } finally { loading.value = false }
+    if (request === knowledgeRequest) loadError.value = error.message
+  } finally { if (request === knowledgeRequest) loading.value = false }
 }
 
 async function uploadDocuments(event) {
@@ -98,11 +114,14 @@ async function uploadDocuments(event) {
 }
 
 async function runAction(doc, action, successMessage) {
+  if (actionIds.value.includes(doc.id)) return
+  actionIds.value.push(doc.id)
   try {
     await api(`/api/v1/knowledge/documents/${doc.id}/${action}`, { method: 'POST' })
     notify(successMessage)
     await loadKnowledge(true)
   } catch (error) { notify(error.message, 'error') }
+  finally { actionIds.value = actionIds.value.filter(id => id !== doc.id) }
 }
 
 function prepare(doc) { return runAction(doc, 'prepare', '已开始解析并切片') }
@@ -120,6 +139,7 @@ function askConfirm(title, message, action, danger = false) {
 async function confirmAction() {
   confirmState.busy = true
   try { await confirmState.action?.(); confirmState.open = false }
+  catch (error) { notify(error.message, 'error') }
   finally { confirmState.busy = false }
 }
 
@@ -152,18 +172,25 @@ async function saveMetadata() {
 }
 
 async function openChunks(doc, page = 1) {
+  const request = ++chunksRequest
+  chunksBusy.value = true
+  chunksError.value = ''
+  chunks.value = []
   chunksDoc.value = doc
   chunkPage.value = page
   try {
     const query = new URLSearchParams({ q: chunkQuery.value, page: String(page), page_size: '12' })
     const data = await api(`/api/v1/knowledge/documents/${doc.id}/chunks/search?${query}`)
+    if (request !== chunksRequest) return
     chunks.value = data.items
     chunkPages.value = data.pages
     chunkTotal.value = data.total
-  } catch (error) { notify(error.message, 'error') }
+  } catch (error) { if (request === chunksRequest) chunksError.value = error.message }
+  finally { if (request === chunksRequest) chunksBusy.value = false }
 }
 async function openJobs(doc) {
   jobsDoc.value = doc
+  jobs.value = []
   try { jobs.value = await api(`/api/v1/knowledge/documents/${doc.id}/jobs`) }
   catch (error) { notify(error.message, 'error') }
 }
@@ -205,7 +232,7 @@ function previewable(doc) { return fileKind(doc) === 'PDF' || fileKind(doc) === 
 
 onMounted(() => {
   loadKnowledge()
-  pollTimer = window.setInterval(() => { if (processingCount.value) loadKnowledge(true) }, 2000)
+  pollTimer = window.setInterval(() => { if (processingCount.value && !document.hidden) loadKnowledge(true) }, 4000)
 })
 onUnmounted(() => window.clearInterval(pollTimer))
 </script>
@@ -214,29 +241,30 @@ onUnmounted(() => window.clearInterval(pollTimer))
   <section class="kb-workspace">
     <header class="kb-hero">
       <div>
-        <p>知识库工作区</p>
-        <h2>把原始资料整理成可核验的医学证据</h2>
-        <span>文件、切片、向量和任务记录保持同一条生命周期。</span>
+        <p>KNOWLEDGE LIBRARY</p>
+        <h2>你的医学知识库</h2>
+        <span>整理资料、查看切片，让每一份知识成为回答的依据。</span>
       </div>
       <div class="kb-hero-actions">
-        <button class="secondary-button" @click="loadKnowledge()">刷新状态</button>
-        <button class="primary-button" :disabled="uploadBusy" @click="uploadInput?.click()">{{ uploadBusy ? '正在上传' : '上传资料' }}</button>
+        <button class="secondary-button" @click="loadKnowledge()"><UiIcon name="refresh" :size="15" />刷新</button>
+        <button class="primary-button" :disabled="uploadBusy" @click="uploadInput?.click()"><UiIcon name="upload" :size="16" />{{ uploadBusy ? '正在上传…' : '上传资料' }}</button>
         <input ref="uploadInput" hidden type="file" multiple accept=".pdf,.docx,.xlsm,.xlsx,.txt,.md" @change="uploadDocuments">
       </div>
     </header>
 
     <div class="kb-summary">
       <div><strong>{{ stats.total || 0 }}</strong><span>全部文档</span></div>
-      <div><strong>{{ stats.indexed || 0 }}</strong><span>可参与检索</span></div>
+      <div class="summary-ready"><strong>{{ stats.indexed || 0 }}</strong><span>可参与检索</span></div>
       <div><strong>{{ processingCount }}</strong><span>正在处理</span></div>
-      <div><strong>{{ stats.failed || 0 }}</strong><span>需要处理</span></div>
-      <div class="kb-path"><span>当前流程</span><b>上传 → 解析并切片 → 向量化 → 检索</b></div>
+      <div class="summary-error"><strong>{{ (stats.failed || 0) + (stats.interrupted || 0) }}</strong><span>需要处理</span></div>
+
     </div>
 
+    <div v-if="loadError" class="load-error" role="alert"><span>资料加载失败：{{ loadError }}</span><button @click="loadKnowledge()">重试</button></div>
     <div class="kb-controls">
-      <label class="search-field"><span>搜索</span><input v-model="search" placeholder="文件名、分类或标签"></label>
+      <label class="search-field"><span>搜索</span><input v-model="search" placeholder="搜索文件名、机构或标签…"></label>
       <label><span>分类</span><select v-model="categoryFilter" @change="loadKnowledge()"><option value="all">全部分类</option><option v-for="item in categories" :key="item[0]" :value="item[0]">{{ item[1] }}</option></select></label>
-      <label><span>状态</span><select v-model="statusFilter" @change="loadKnowledge()"><option value="all">全部状态</option><option value="uploaded">待解析</option><option value="processing">处理中</option><option value="parsed">待向量化</option><option value="indexed">可检索</option><option value="failed">失败</option><option value="interrupted">中断</option></select></label>
+      <label><span>状态</span><select v-model="statusFilter" @change="loadKnowledge()"><option value="all">全部状态</option><option value="uploaded">待解析</option><option value="processing">解析中</option><option value="indexing">向量化中</option><option value="parsed">待向量化</option><option value="indexed">可检索</option><option value="failed">失败</option><option value="interrupted">中断</option></select></label>
       <details class="upload-settings"><summary>上传默认设置</summary><div><label>资料分类<select v-model="uploadSettings.category"><option v-for="item in categories" :key="item[0]" :value="item[0]">{{ item[1] }}</option></select></label><label>来源类型<select v-model="uploadSettings.source_type"><option value="internal">内部资料</option><option value="external">外部资料</option></select></label><label>权威等级<select v-model="uploadSettings.authority_level"><option value="high">高</option><option value="medium">中</option><option value="unknown">未评估</option></select></label></div></details>
     </div>
 
@@ -248,29 +276,32 @@ onUnmounted(() => window.clearInterval(pollTimer))
       <button @click="selectedIds = []">取消选择</button>
     </div>
 
-    <div class="kb-table-head"><label><input type="checkbox" :checked="allSelected" @change="toggleAll"><span>文档</span></label><span>处理状态</span><span>生命周期</span><span>操作</span></div>
+    <div class="records-panel"><div class="records-heading"><div><UiIcon name="file" :size="16" /><b>全部资料</b><span class="subtle-badge">{{ filteredDocuments.length }}</span></div><span>上传 · 解析切片 · 向量化 · 检索</span></div>
+    <div class="kb-table-head"><label><input type="checkbox" :checked="allSelected" :aria-label="`选择全部 ${filteredDocuments.length} 份匹配文档`" @change="toggleAll"><span>文档</span></label><span>处理状态</span><span>生命周期</span><span>操作</span></div>
     <div v-if="loading" class="kb-loading"><i v-for="item in 4" :key="item"></i></div>
-    <div v-else-if="!filteredDocuments.length" class="kb-empty"><h3>这里还没有匹配的资料</h3><p>上传 PDF、Word、Excel、Markdown 或文本文件，建立第一条证据链。</p><button class="primary-button" @click="uploadInput?.click()">选择文件</button></div>
+    <div v-else-if="!filteredDocuments.length" class="kb-empty"><UiIcon name="library" :size="34" /><h3>这里还没有匹配的资料</h3><p>上传 PDF、Word、Excel、Markdown 或文本文件，建立第一条证据链。</p><button class="primary-button" @click="uploadInput?.click()">选择文件</button></div>
     <div v-else class="kb-document-list">
-      <article v-for="doc in filteredDocuments" :key="doc.id" class="kb-document" :class="{ selected: selectedIds.includes(doc.id) }">
-        <div class="document-identity"><input v-model="selectedIds" type="checkbox" :value="doc.id"><span class="file-badge">{{ fileKind(doc) }}</span><div><button class="document-name" @click="previewDoc = doc">{{ doc.filename }}</button><p>{{ categoryLabel(doc.category) }} · {{ doc.publisher || '内部资料' }} · {{ formatBytes(doc.size_bytes) }} · v{{ doc.version || 1 }}</p><div class="document-tags"><span v-for="tag in doc.tags" :key="tag">{{ tag }}</span></div></div></div>
+      <article v-for="doc in pagedDocuments" :key="doc.id" class="kb-document" :class="{ selected: selectedIds.includes(doc.id) }">
+        <div class="document-identity"><input v-model="selectedIds" type="checkbox" :value="doc.id" :aria-label="`选择 ${doc.filename}`"><span class="file-badge" :data-kind="fileKind(doc)">{{ fileKind(doc) }}</span><div><button class="document-name" :title="doc.filename" @click="previewDoc = doc">{{ doc.filename }}</button><p>{{ categoryLabel(doc.category) }} · {{ doc.publisher || '内部资料' }} · {{ formatBytes(doc.size_bytes) }} · v{{ doc.version || 1 }}</p><div class="document-tags"><span v-for="tag in doc.tags" :key="tag">{{ tag }}</span></div></div></div>
         <div class="document-status"><span class="status-dot" :class="doc.status"></span><div><b>{{ statusLabel(doc.status) }}</b><small>{{ stageLabel(doc.current_stage) }}</small><em v-if="doc.error_message">{{ doc.error_message }}</em></div></div>
         <div class="document-progress"><div><i :style="{ width: `${Math.min(100, doc.progress || 0)}%` }"></i></div><span>{{ doc.progress || 0 }}%</span><small :class="{ 'count-warning': doc.total_chunks && doc.indexed_chunks > doc.total_chunks }">{{ doc.total_chunks ? (doc.indexed_chunks > doc.total_chunks ? '历史向量数不一致，请重新生成' : `${doc.indexed_chunks || 0}/${doc.total_chunks} 个切片已入库`) : formatTime(doc.updated_at) }}</small></div>
-        <div class="document-actions"><button @click="previewDoc = doc">原文</button><button v-if="doc.total_chunks" @click="chunkQuery = ''; openChunks(doc)">切片</button><button @click="openEditor(doc)">信息</button><button @click="openJobs(doc)">记录</button><button v-if="doc.status === 'uploaded'" class="action-main" @click="prepare(doc)">解析并切片</button><button v-else-if="doc.status === 'parsed'" class="action-main" @click="indexDoc(doc)">生成向量</button><button v-else-if="doc.status === 'failed' || doc.status === 'interrupted'" class="action-main" @click="retry(doc)">重试</button><details class="row-menu"><summary>更多</summary><div><button v-if="doc.total_chunks" @click="reparse(doc)">重新解析</button><button v-if="doc.status === 'indexed'" @click="indexDoc(doc, true)">重新生成向量</button><a :href="`/api/v1/knowledge/documents/${doc.id}/file`" download>下载原文件</a><button class="danger-text" @click="deleteDocument(doc)">删除文档</button></div></details></div>
+        <div class="document-actions"><button @click="previewDoc = doc">原文</button><button v-if="doc.total_chunks" @click="chunkQuery = ''; openChunks(doc)">切片</button><button v-if="doc.status === 'uploaded'" class="action-main" :disabled="actionIds.includes(doc.id)" @click="prepare(doc)">解析并切片</button><button v-else-if="doc.status === 'parsed'" class="action-main" :disabled="actionIds.includes(doc.id)" @click="indexDoc(doc)">生成向量</button><button v-else-if="doc.status === 'failed' || doc.status === 'interrupted'" class="action-main" :disabled="actionIds.includes(doc.id)" @click="retry(doc)">重试</button><details class="row-menu"><summary aria-label="更多文档操作">···</summary><div><button @click="openEditor(doc)">编辑信息</button><button @click="openJobs(doc)">任务记录</button><button v-if="doc.total_chunks" @click="reparse(doc)">重新解析</button><button v-if="doc.status === 'indexed'" @click="indexDoc(doc, true)">重新生成向量</button><a :href="`/api/v1/knowledge/documents/${doc.id}/file`" download>下载原文件</a><button class="danger-text" @click="deleteDocument(doc)">删除文档</button></div></details></div>
       </article>
     </div>
 
-    <div v-if="previewDoc" class="product-modal" @click.self="previewDoc = null"><section class="preview-dialog"><header><div><h3>{{ previewDoc.filename }}</h3><p>{{ categoryLabel(previewDoc.category) }} · 原文件预览</p></div><div><a :href="`/api/v1/knowledge/documents/${previewDoc.id}/file`" download>下载</a><button @click="previewDoc = null">关闭</button></div></header><iframe v-if="previewable(previewDoc)" :src="`/api/v1/knowledge/documents/${previewDoc.id}/preview`"></iframe><div v-else class="office-fallback"><b>{{ fileKind(previewDoc) }}</b><h4>浏览器无法直接预览此格式</h4><p>可以下载原文件，或查看解析后的结构化切片。</p><button v-if="previewDoc.total_chunks" class="primary-button" @click="chunksDoc = previewDoc; previewDoc = null; openChunks(chunksDoc)">查看切片</button></div></section></div>
+    <footer class="records-footer"><span>共 {{ filteredDocuments.length }} 份资料</span><div><button :disabled="page <= 1" @click="page--">上一页</button><span>{{ page }} / {{ pageCount }}</span><button :disabled="page >= pageCount" @click="page++">下一页</button></div></footer></div>
 
-    <div v-if="editDoc" class="product-modal" @click.self="editDoc = null"><section class="form-dialog"><header><div><h3>文档与来源信息</h3><p>{{ editDoc.filename }}</p></div><button @click="editDoc = null">关闭</button></header><div class="form-grid"><label>资料分类<select v-model="editForm.category"><option v-for="item in categories" :key="item[0]" :value="item[0]">{{ item[1] }}</option></select></label><label>来源类型<select v-model="editForm.source_type"><option value="internal">内部资料</option><option value="external">外部资料</option><option value="public_external">公开权威来源</option></select></label><label>权威等级<select v-model="editForm.authority_level"><option value="high">高</option><option value="medium">中</option><option value="low">低</option><option value="unknown">未评估</option></select></label><label class="full-field">标签<input v-model="editForm.tags" placeholder="使用逗号分隔，例如：高血压，2024指南"></label><div v-if="editDoc.publisher || editDoc.source_url" class="provenance-card full-field"><div><span>出版机构</span><b>{{ editDoc.publisher || '—' }}</b></div><div><span>发布日期 / 语种</span><b>{{ editDoc.published_at || '—' }} · {{ editDoc.language || '—' }}</b></div><div><span>外部 ID</span><b>{{ editDoc.external_id || '—' }}</b></div><div><span>语料集</span><b>{{ editDoc.corpus_id || '—' }}</b></div><div class="provenance-license"><span>许可</span><b>{{ editDoc.license || '未声明' }}</b></div><a v-if="editDoc.source_url" :href="editDoc.source_url" target="_blank" rel="noopener noreferrer">打开官方原始来源 ↗</a></div></div><footer><button @click="editDoc = null">取消</button><button class="primary-button" @click="saveMetadata">保存更改</button></footer></section></div>
+    <div v-if="previewDoc" v-dialog="() => previewDoc = null" class="product-modal" @click.self="previewDoc = null"><section class="preview-dialog" role="dialog" aria-modal="true" aria-label="原文件预览"><header><div><h3>{{ previewDoc.filename }}</h3><p>{{ categoryLabel(previewDoc.category) }} · 原文件预览</p></div><div><a :href="`/api/v1/knowledge/documents/${previewDoc.id}/file`" download>下载</a><button @click="previewDoc = null">关闭</button></div></header><iframe title="原文件预览" v-if="previewable(previewDoc)" :src="`/api/v1/knowledge/documents/${previewDoc.id}/preview`"></iframe><div v-else class="office-fallback"><b>{{ fileKind(previewDoc) }}</b><h4>浏览器无法直接预览此格式</h4><p>可以下载原文件，或查看解析后的结构化切片。</p><button v-if="previewDoc.total_chunks" class="primary-button" @click="chunksDoc = previewDoc; previewDoc = null; openChunks(chunksDoc)">查看切片</button></div></section></div>
 
-    <div v-if="chunksDoc" class="product-modal" @click.self="chunksDoc = null"><section class="chunks-dialog"><header><div><h3>切片预览</h3><p>{{ chunksDoc.filename }} · 共 {{ chunkTotal }} 个切片</p></div><button @click="chunksDoc = null">关闭</button></header><form class="chunk-search" @submit.prevent="openChunks(chunksDoc, 1)"><input v-model="chunkQuery" placeholder="搜索切片正文或标题路径"><button>搜索</button></form><div class="chunk-results"><article v-for="chunk in chunks" :key="chunk.id" @click="expandedChunk = chunk"><div><b>#{{ String(chunk.chunk_index + 1).padStart(3, '0') }}</b><span>{{ chunk.metadata?.heading_path || chunk.metadata?.path || '正文' }}</span><small>{{ chunk.content.length }} 字</small></div><p>{{ chunk.content }}</p><button>展开全文</button></article><div v-if="!chunks.length" class="mini-empty">没有匹配的切片</div></div><footer class="pagination"><button :disabled="chunkPage <= 1" @click="openChunks(chunksDoc, chunkPage - 1)">上一页</button><span>{{ chunkPage }} / {{ chunkPages }}</span><button :disabled="chunkPage >= chunkPages" @click="openChunks(chunksDoc, chunkPage + 1)">下一页</button></footer></section></div>
+    <div v-if="editDoc" v-dialog="() => editDoc = null" class="product-modal" @click.self="editDoc = null"><section class="form-dialog" role="dialog" aria-modal="true" aria-label="编辑文档信息"><header><div><h3>文档与来源信息</h3><p>{{ editDoc.filename }}</p></div><button @click="editDoc = null">关闭</button></header><div class="form-grid"><label>资料分类<select v-model="editForm.category"><option v-for="item in categories" :key="item[0]" :value="item[0]">{{ item[1] }}</option></select></label><label>来源类型<select v-model="editForm.source_type"><option value="internal">内部资料</option><option value="external">外部资料</option><option value="public_external">公开权威来源</option></select></label><label>权威等级<select v-model="editForm.authority_level"><option value="high">高</option><option value="medium">中</option><option value="low">低</option><option value="unknown">未评估</option></select></label><label class="full-field">标签<input v-model="editForm.tags" placeholder="使用逗号分隔，例如：高血压，2024指南"></label><div v-if="editDoc.publisher || editDoc.source_url" class="provenance-card full-field"><div><span>出版机构</span><b>{{ editDoc.publisher || '—' }}</b></div><div><span>发布日期 / 语种</span><b>{{ editDoc.published_at || '—' }} · {{ editDoc.language || '—' }}</b></div><div><span>外部 ID</span><b>{{ editDoc.external_id || '—' }}</b></div><div><span>语料集</span><b>{{ editDoc.corpus_id || '—' }}</b></div><div class="provenance-license"><span>许可</span><b>{{ editDoc.license || '未声明' }}</b></div><a v-if="editDoc.source_url" :href="editDoc.source_url" target="_blank" rel="noopener noreferrer">打开官方原始来源 ↗</a></div></div><footer><button @click="editDoc = null">取消</button><button class="primary-button" @click="saveMetadata">保存更改</button></footer></section></div>
 
-    <div v-if="expandedChunk" class="product-modal nested" @click.self="expandedChunk = null"><section class="chunk-detail"><header><div><h3>切片 #{{ expandedChunk.chunk_index + 1 }}</h3><p>{{ expandedChunk.metadata?.heading_path || expandedChunk.metadata?.path || '正文' }}</p></div><button @click="expandedChunk = null">关闭</button></header><pre>{{ expandedChunk.content }}</pre></section></div>
+    <div v-if="chunksDoc" v-dialog="() => chunksDoc = null" class="product-modal" @click.self="chunksDoc = null"><section class="chunks-dialog" role="dialog" aria-modal="true" aria-label="切片预览"><header><div><h3>切片预览</h3><p>{{ chunksDoc.filename }} · 共 {{ chunkTotal }} 个切片</p></div><button @click="chunksDoc = null">关闭</button></header><form class="chunk-search" @submit.prevent="openChunks(chunksDoc, 1)"><input v-model="chunkQuery" placeholder="搜索切片正文或标题路径"><button>搜索</button></form><div class="chunk-results"><div v-if="chunksBusy" class="mini-empty" role="status">正在读取切片…</div><div v-else-if="chunksError" class="load-error" role="alert">{{ chunksError }}<button @click="openChunks(chunksDoc, chunkPage)">重试</button></div><article v-for="chunk in chunks" :key="chunk.id" tabindex="0" @keydown.enter.self="expandedChunk = chunk" @click="expandedChunk = chunk"><div><b>#{{ String(chunk.chunk_index + 1).padStart(3, '0') }}</b><span>{{ chunk.metadata?.heading_path || chunk.metadata?.path || '正文' }}</span><small>{{ chunk.content.length }} 字</small></div><p>{{ chunk.content }}</p><button>展开全文</button></article><div v-if="!chunksBusy && !chunksError && !chunks.length" class="mini-empty">没有匹配的切片</div></div><footer class="pagination"><button :disabled="chunkPage <= 1" @click="openChunks(chunksDoc, chunkPage - 1)">上一页</button><span>{{ chunkPage }} / {{ chunkPages }}</span><button :disabled="chunkPage >= chunkPages" @click="openChunks(chunksDoc, chunkPage + 1)">下一页</button></footer></section></div>
 
-    <div v-if="jobsDoc" class="product-modal" @click.self="jobsDoc = null"><section class="jobs-dialog"><header><div><h3>任务记录</h3><p>{{ jobsDoc.filename }}</p></div><button @click="jobsDoc = null">关闭</button></header><div v-if="jobs.length" class="job-list"><article v-for="job in jobs" :key="job.id"><span class="status-dot" :class="job.status"></span><div><b>{{ job.operation }} · {{ stageLabel(job.stage) }}</b><p>{{ job.error_message || `进度 ${job.progress}%` }}</p></div><time>{{ formatTime(job.created_at) }}</time></article></div><div v-else class="mini-empty">暂无任务记录</div></section></div>
+    <div v-if="expandedChunk" v-dialog="() => expandedChunk = null" class="product-modal nested" @click.self="expandedChunk = null"><section class="chunk-detail" role="dialog" aria-modal="true" aria-label="切片详情"><header><div><h3>切片 #{{ expandedChunk.chunk_index + 1 }}</h3><p>{{ expandedChunk.metadata?.heading_path || expandedChunk.metadata?.path || '正文' }}</p></div><button @click="expandedChunk = null">关闭</button></header><pre>{{ expandedChunk.content }}</pre></section></div>
 
-    <div v-if="confirmState.open" class="product-modal nested" @click.self="confirmState.open = false"><section class="confirm-dialog"><h3>{{ confirmState.title }}</h3><p>{{ confirmState.message }}</p><footer><button @click="confirmState.open = false">取消</button><button :class="confirmState.danger ? 'danger-button' : 'primary-button'" :disabled="confirmState.busy" @click="confirmAction">{{ confirmState.busy ? '处理中' : '确认' }}</button></footer></section></div>
+    <div v-if="jobsDoc" v-dialog="() => jobsDoc = null" class="product-modal" @click.self="jobsDoc = null"><section class="jobs-dialog" role="dialog" aria-modal="true" aria-label="任务记录"><header><div><h3>任务记录</h3><p>{{ jobsDoc.filename }}</p></div><button @click="jobsDoc = null">关闭</button></header><div v-if="jobs.length" class="job-list"><article v-for="job in jobs" :key="job.id"><span class="status-dot" :class="job.status"></span><div><b>{{ job.operation }} · {{ stageLabel(job.stage) }}</b><p>{{ job.error_message || `进度 ${job.progress}%` }}</p></div><time>{{ formatTime(job.created_at) }}</time></article></div><div v-else class="mini-empty">暂无任务记录</div></section></div>
+
+    <div v-if="confirmState.open" v-dialog="() => { if (!confirmState.busy) confirmState.open = false }" class="product-modal nested" @click.self="confirmState.open = false"><section class="confirm-dialog" role="dialog" aria-modal="true" aria-label="确认操作"><h3>{{ confirmState.title }}</h3><p>{{ confirmState.message }}</p><footer><button @click="confirmState.open = false">取消</button><button :class="confirmState.danger ? 'danger-button' : 'primary-button'" :disabled="confirmState.busy" @click="confirmAction">{{ confirmState.busy ? '处理中' : '确认' }}</button></footer></section></div>
   </section>
 </template>
 
