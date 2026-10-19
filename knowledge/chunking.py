@@ -200,7 +200,11 @@ def split_table_text(text: str, policy: ChunkPolicy = DEFAULT_POLICY, tokenizer:
     header_tokens = counter.count(header_text)
     # A malformed/flattened table can contain a single row longer than the
     # model context. The general splitter hard-caps such rows safely.
-    if header_tokens >= policy.max_tokens or any(counter.count(row) >= policy.max_tokens for row in rows):
+    if (
+        header_tokens >= policy.max_tokens
+        or any(counter.count(row) >= policy.max_tokens for row in rows)
+        or any(header_tokens + 1 + counter.count(row) > policy.max_tokens for row in rows)
+    ):
         return split_text(text, policy, tokenizer=tokenizer, table=True)
     chunks: List[str] = []
     current = list(header)

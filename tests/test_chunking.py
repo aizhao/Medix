@@ -12,6 +12,14 @@ class ChunkingSafetyTests(unittest.TestCase):
         self.assertGreater(len(chunks), 1)
         self.assertTrue(all(counter.count(chunk) <= policy.max_tokens for chunk in chunks))
 
+    def test_large_header_and_first_row_are_not_forced_into_one_chunk(self):
+        policy = ChunkPolicy(max_tokens=32, overlap_tokens=4, min_tokens=8)
+        text = ("表" * 15) + "\n" + ("头" * 10) + "\n" + ("值" * 20)
+        chunks = split_table_text(text, policy=policy, tokenizer=None)
+        counter = TokenCounter(tokenizer=None)
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(counter.count(chunk) <= policy.max_tokens for chunk in chunks))
+
     def test_token_count_disables_transformers_overlength_warning(self):
         class FakeTokenizer:
             def __init__(self):
