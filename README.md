@@ -358,7 +358,7 @@ REDIS_CONFIG = {
 
 ### 记忆系统配置
 
-本系统支持两层记忆机制：**短期记忆（会话级）** 和 **长期记忆（跨会话）**。
+本系统支持多层记忆机制：**SQLite 会话记忆**、**Agent 短期上下文**、**长期记忆（跨会话）**和 **Swarm 会话总结**。HTTP API 以 SQLite 为唯一会话事实源，Agent 通过 SQLite 读取历史，避免出现两套会话记录。
 
 #### 短期记忆（ShortTermMemory）
 
@@ -366,7 +366,7 @@ REDIS_CONFIG = {
 
 **配置**：
 ```python
-# 方式1: 内存存储（默认，无需配置）
+# 独立脚本/测试可使用内存存储
 from memory.short_term import ShortTermMemory
 memory = ShortTermMemory(session_id="user_123", storage_type="memory")
 
@@ -388,9 +388,9 @@ memory.clear()
 ```
 
 **存储方式**：
-- **内存**（默认）：无需配置，保留时间60分钟
-- **Redis**（可选）：需配置 REDIS_CONFIG，支持持久化
-- 存储容量：最近10条消息
+- **HTTP API**：SQLite `sessions/messages` 为唯一会话事实源
+- **独立脚本/测试**：可使用内存或 Redis 兼容实现
+- Agent 每次推理读取 SQLite 最近历史，API 边界负责写入 user/assistant 消息
 
 #### 长期记忆（Mem0）
 

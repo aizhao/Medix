@@ -19,7 +19,8 @@ from .shared_context import SharedContext
 from .lead_agent import LeadAgent
 from .events import Event, EventType
 from agents import ConsultationAgent, DiagnosticAgent, ResearchAgent
-from memory import SessionSummaryManager, SessionSummary, ShortTermMemory, LongTermMemory
+from memory import SessionSummaryManager, SessionSummary, SQLiteShortTermMemory, LongTermMemory
+from backend.storage import SQLiteStore
 from research.query_router import classify_query, urgent_response
 
 
@@ -42,7 +43,8 @@ class SwarmCoordinator:
     def __init__(
         self,
         llm_client: Optional[LLMClient] = None,
-        enable_swarm: bool = True
+        enable_swarm: bool = True,
+        conversation_store: Optional[Any] = None,
     ):
         self.llm_client = llm_client or LLMClient()
         self.enable_swarm = enable_swarm
@@ -62,7 +64,9 @@ class SwarmCoordinator:
 
         # 记忆管理器
         self.session_manager = SessionSummaryManager()
-        self.short_term_memory = ShortTermMemory(storage_type="memory")  # 或 "redis"
+        # 所有运行入口统一使用 SQLite；API 可注入已有连接，CLI/直接调用则复用默认数据库。
+        self.conversation_store = conversation_store or SQLiteStore()
+        self.short_term_memory = SQLiteShortTermMemory(self.conversation_store)
         self.long_term_memory = LongTermMemory()
         self._evidence_workflow = None
 
@@ -99,12 +103,14 @@ class SwarmCoordinator:
         result: Dict[str, Any],
         mode: str,
         started_at: datetime,
+        user_id: str,
     ) -> None:
         try:
             self.long_term_memory.add_session_summary(
                 session_id=session_id,
                 question=question,
                 answer=str(result.get("answer") or ""),
+                user_id=user_id,
                 metadata={
                     "mode": mode,
                     "total_time": (datetime.now() - started_at).total_seconds(),
@@ -119,6 +125,7 @@ class SwarmCoordinator:
         context: Optional[Dict[str, Any]] = None,
         session_id: Optional[str] = None,
         enable_swarm: Optional[bool] = None,
+        user_id: str = "anonymous",
     ) -> Dict[str, Any]:
         """
         处理用户问题
@@ -136,6 +143,9 @@ class SwarmCoordinator:
         if session_id is None:
             session_id = f"{start_time.strftime('%Y%m%d-%H%M%S')}-{str(uuid.uuid4())[:8]}"
 
+        if hasattr(self.short_term_memory, "begin_turn"):
+            self.short_term_memory.begin_turn(session_id, question)
+
         logger.info(f"Processing question (session={session_id}): {question[:50]}...")
 
         # ===== 统一的记忆检索（所有模式都使用）=====
@@ -148,7 +158,8 @@ class SwarmCoordinator:
         # 2. 检索长期记忆（相似历史会话）
         similar_memories = self.long_term_memory.search_similar_sessions(
             query=question,
-            limit=3
+            limit=3,
+            user_id=user_id,
         )
 
         # 3. 构建增强上下文
@@ -181,7 +192,7 @@ class SwarmCoordinator:
             result = urgent_response(question)
             result["session_id"] = session_id
             result["route_reason"] = query_route.reason
-            self._save_long_term_result(session_id, question, result, "urgent_safety", start_time)
+            self._save_long_term_result(session_id, question, result, "urgent_safety", start_time, user_id)
             return result
         if query_route.route == "medical_evidence":
             try:
@@ -210,7 +221,7 @@ class SwarmCoordinator:
             result["session_id"] = session_id
             result["route_reason"] = query_route.reason
             result.setdefault("evidence_trace", {})["route"] = query_route.to_dict()
-            self._save_long_term_result(session_id, question, result, "evidence_first", start_time)
+            self._save_long_term_result(session_id, question, result, "evidence_first", start_time, user_id)
             return result
 
         # Step 1: LeadAgent 分解任务
@@ -266,7 +277,8 @@ class SwarmCoordinator:
                 context=enhanced_context,
                 assessment=assessment,
                 session_id=session_id,
-                start_time=start_time
+                start_time=start_time,
+                user_id=user_id
             )
             final_answer = result.get('answer', '')
 
@@ -304,6 +316,7 @@ class SwarmCoordinator:
                 session_id=session_id,
                 question=question,
                 answer=final_answer,
+                user_id=user_id,
                 metadata={
                     "mode": mode,
                     "subtasks_count": len(subtasks),
@@ -322,7 +335,8 @@ class SwarmCoordinator:
         context: Optional[Dict[str, Any]],
         assessment: Dict[str, Any],
         session_id: str,
-        start_time: datetime
+        start_time: datetime,
+        user_id: str = "anonymous"
     ) -> Dict[str, Any]:
         """
         使用 Swarm 处理复杂问题
@@ -417,6 +431,7 @@ class SwarmCoordinator:
                 session_id=session_id,
                 question=question,
                 answer=final_answer,
+                user_id=user_id,
                 metadata={
                     "mode": "swarm",
                     "agents_count": len(shared_context.agent_contributions),
@@ -543,7 +558,8 @@ async def process_with_swarm(
     question: str,
     context: Optional[Dict[str, Any]] = None,
     enable_swarm: bool = True,
-    session_id: Optional[str] = None
+    session_id: Optional[str] = None,
+    user_id: str = "anonymous",
 ) -> Dict[str, Any]:
     """
     便捷函数：使用 Swarm 处理问题
@@ -558,4 +574,4 @@ async def process_with_swarm(
         处理结果
     """
     coordinator = SwarmCoordinator(enable_swarm=enable_swarm)
-    return await coordinator.process(question, context, session_id=session_id)
+    return await coordinator.process(question, context, session_id=session_id, user_id=user_id)

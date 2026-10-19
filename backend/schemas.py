@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=8000)
     session_id: Optional[str] = None
+    user_id: str = Field(default="anonymous", min_length=1, max_length=128)
     context: Dict[str, Any] = Field(default_factory=dict)
     enable_swarm: bool = True
 

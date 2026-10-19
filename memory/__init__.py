@@ -10,6 +10,7 @@
 # 短期和长期记忆
 from .short_term import (
     ShortTermMemory,
+    SQLiteShortTermMemory,
     ConversationHistory
 )
 from .long_term import (
@@ -40,6 +41,7 @@ from .session_summary import (
 __all__ = [
     # 短期和长期记忆
     'ShortTermMemory',
+    'SQLiteShortTermMemory',
     'ConversationHistory',
     'LongTermMemory',
     # Harness Engineering: 熵管理

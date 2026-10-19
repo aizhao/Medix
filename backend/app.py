@@ -48,8 +48,8 @@ async def recover_ingestion_state() -> None:
 
 def _state(request: Request) -> Dict[str, Any]:
     if not hasattr(request.app.state, "coordinator"):
-        request.app.state.coordinator = SwarmCoordinator()
         request.app.state.store = SQLiteStore()
+        request.app.state.coordinator = SwarmCoordinator(conversation_store=request.app.state.store)
     return {
         "coordinator": request.app.state.coordinator,
         "store": request.app.state.store,
@@ -144,7 +144,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
     state = _state(request)
     session_id = payload.session_id or str(uuid.uuid4())
     store = state["store"]
-    store.append_message(session_id, "user", payload.message)
+    store.append_message(session_id, "user", payload.message, metadata={"source": "user_input", "user_id": payload.user_id, "request_id": request_id}, owner_id=payload.user_id)
 
     try:
         result = await state["coordinator"].process(
@@ -152,9 +152,10 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             context=payload.context,
             session_id=session_id,
             enable_swarm=payload.enable_swarm,
+            user_id=payload.user_id,
         )
     except Exception as exc:
-        store.append_message(session_id, "assistant", "医学问答服务暂时不可用。", metadata={"status": "failed", "error": str(exc)[:1000], "request_id": request_id})
+        store.append_message(session_id, "assistant", "医学问答服务暂时不可用。", metadata={"status": "failed", "error": str(exc)[:1000], "request_id": request_id, "source": "api_error"}, owner_id=payload.user_id)
         raise HTTPException(status_code=502, detail=f"医学问答服务暂时不可用: {exc}") from exc
 
     answer = str(result.get("answer") or "抱歉，系统未能生成回答。")
@@ -186,7 +187,16 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
         disclaimer=str(result.get("disclaimer") or "以上信息仅供参考，不能替代专业医生的诊断和治疗。"),
         latency_ms=int((time.perf_counter() - started) * 1000),
     )
-    store.append_message(session_id, "assistant", answer, metadata=response.model_dump(exclude={"answer"}))
+    message_metadata = response.model_dump(exclude={"answer"})
+    message_metadata.update({
+        "source": "api_response",
+        "memory_version": request_id,
+        "tool_results": [
+            {"tool": item.get("tool"), "result": str(item.get("result", ""))[:2000]}
+            for item in (result.get("tool_results") or [])
+        ],
+    })
+    store.append_message(session_id, "assistant", answer, metadata=message_metadata, owner_id=payload.user_id)
     return response
 
 
@@ -199,7 +209,7 @@ async def chat_stream(payload: ChatRequest, request: Request) -> StreamingRespon
         state = _state(request)
         session_id = payload.session_id or str(uuid.uuid4())
         store = state["store"]
-        store.append_message(session_id, "user", payload.message)
+        store.append_message(session_id, "user", payload.message, metadata={"source": "user_input", "user_id": payload.user_id, "request_id": request_id}, owner_id=payload.user_id)
 
         def emit(event: str, data: Dict[str, Any]) -> str:
             return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
@@ -213,6 +223,7 @@ async def chat_stream(payload: ChatRequest, request: Request) -> StreamingRespon
                 context=payload.context,
                 session_id=session_id,
                 enable_swarm=payload.enable_swarm,
+                user_id=payload.user_id,
             )
             answer = str(result.get("answer") or "抱歉，系统未能生成回答。")
             yield emit("stage", {"name": "evidence", "label": "整理检索证据和来源"})
@@ -246,11 +257,20 @@ async def chat_stream(payload: ChatRequest, request: Request) -> StreamingRespon
                 disclaimer=str(result.get("disclaimer") or "以上信息仅供参考，不能替代专业医生的诊断和治疗。"),
                 latency_ms=int((time.perf_counter() - started) * 1000),
             )
-            store.append_message(session_id, "assistant", answer, metadata=response.model_dump(exclude={"answer"}))
+            message_metadata = response.model_dump(exclude={"answer"})
+            message_metadata.update({
+                "source": "api_stream_response",
+                "memory_version": request_id,
+                "tool_results": [
+                    {"tool": item.get("tool"), "result": str(item.get("result", ""))[:2000]}
+                    for item in (result.get("tool_results") or [])
+                ],
+            })
+            store.append_message(session_id, "assistant", answer, metadata=message_metadata, owner_id=payload.user_id)
             yield emit("completed", response.model_dump())
         except Exception as exc:
             error_message = f"医学问答服务暂时不可用: {exc}"
-            store.append_message(session_id, "assistant", "医学问答服务暂时不可用。", metadata={"status": "failed", "error": str(exc)[:1000], "request_id": request_id})
+            store.append_message(session_id, "assistant", "医学问答服务暂时不可用。", metadata={"status": "failed", "error": str(exc)[:1000], "request_id": request_id, "source": "api_error"}, owner_id=payload.user_id)
             yield emit("error", {"message": error_message, "request_id": request_id, "retryable": getattr(exc, "medix_non_retryable", False) is False})
 
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -266,6 +286,50 @@ async def get_session(session_id: str, request: Request) -> SessionResponse:
         session_id=session_id,
         messages=[SessionMessage(**message) for message in messages],
     )
+
+
+@app.get("/api/v1/memories")
+async def list_memories(user_id: str = "anonymous", include_deleted: bool = False, request: Request = None) -> list[dict[str, Any]]:
+    """List memories within one user scope; project/agent scopes are intentionally not used yet."""
+    store = _state(request)["store"]
+    return store.list_memories(user_id, status=None if include_deleted else "active")
+
+
+@app.post("/api/v1/memories")
+async def create_memory(request: Request) -> dict[str, Any]:
+    payload = await request.json()
+    user_id = str(payload.get("user_id") or "anonymous")
+    content = str(payload.get("content") or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="content is required")
+    return _state(request)["store"].add_memory(
+        user_id=user_id,
+        content=content,
+        memory_type=str(payload.get("memory_type") or "fact"),
+        source_session_id=str(payload.get("source_session_id") or ""),
+        source_message_id=payload.get("source_message_id"),
+        confidence=float(payload.get("confidence", 0.5)),
+        expires_at=payload.get("expires_at"),
+        metadata=payload.get("metadata") or {},
+    )
+
+
+@app.patch("/api/v1/memories/{memory_id}")
+async def update_memory(memory_id: int, request: Request, user_id: str = "anonymous") -> dict[str, Any]:
+    payload = await request.json()
+    if "metadata" in payload:
+        payload["metadata_json"] = json.dumps(payload.pop("metadata") or {}, ensure_ascii=False)
+    memory = _state(request)["store"].update_memory(memory_id, user_id, **payload)
+    if not memory:
+        raise HTTPException(status_code=404, detail="memory not found")
+    return memory
+
+
+@app.delete("/api/v1/memories/{memory_id}")
+async def delete_memory(memory_id: int, user_id: str = "anonymous", request: Request = None) -> dict[str, Any]:
+    if not _state(request)["store"].delete_memory(memory_id, user_id):
+        raise HTTPException(status_code=404, detail="memory not found")
+    return {"status": "deleted", "memory_id": memory_id}
 
 
 @app.get("/api/v1/sessions")

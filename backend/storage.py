@@ -32,6 +32,7 @@ class SQLiteStore:
             db.executescript("""
             CREATE TABLE IF NOT EXISTS sessions (
                 id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '新会话',
+                owner_id TEXT NOT NULL DEFAULT 'anonymous',
                 created_at TEXT NOT NULL, updated_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS messages (
@@ -73,11 +74,32 @@ class SQLiteStore:
                 UNIQUE(document_id, chunk_index)
             );
             CREATE INDEX IF NOT EXISTS idx_chunks_document ON document_chunks(document_id, chunk_index);
+            CREATE TABLE IF NOT EXISTS memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                memory_type TEXT NOT NULL DEFAULT 'fact',
+                content TEXT NOT NULL,
+                source_session_id TEXT NOT NULL DEFAULT '',
+                source_message_id INTEGER,
+                confidence REAL NOT NULL DEFAULT 0.5,
+                status TEXT NOT NULL DEFAULT 'active',
+                version INTEGER NOT NULL DEFAULT 1,
+                valid_from TEXT NOT NULL,
+                expires_at TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_memories_user_status ON memories(user_id, status);
+            CREATE INDEX IF NOT EXISTS idx_memories_source_session ON memories(source_session_id);
             """)
             # Migrate databases created by the initial MVP.
             columns = {row[1] for row in db.execute("PRAGMA table_info(messages)")}
             if "metadata_json" not in columns:
                 db.execute("ALTER TABLE messages ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}' ")
+            columns = {row[1] for row in db.execute("PRAGMA table_info(sessions)")}
+            if "owner_id" not in columns:
+                db.execute("ALTER TABLE sessions ADD COLUMN owner_id TEXT NOT NULL DEFAULT 'anonymous'")
             columns = {row[1] for row in db.execute("PRAGMA table_info(documents)")}
             migrations = {
                 "category": "TEXT NOT NULL DEFAULT 'unclassified'", "tags_json": "TEXT NOT NULL DEFAULT '[]'",
@@ -96,16 +118,89 @@ class SQLiteStore:
                     db.execute(f"ALTER TABLE documents ADD COLUMN {name} {definition}")
             db.execute("UPDATE documents SET updated_at=created_at WHERE updated_at='' OR updated_at IS NULL")
 
-    def ensure_session(self, session_id: str, title: str = "新会话") -> None:
+    def ensure_session(self, session_id: str, title: str = "新会话", owner_id: str = "anonymous") -> None:
         now = self._now()
         with self._lock, self._connect() as db:
-            db.execute("INSERT OR IGNORE INTO sessions(id,title,created_at,updated_at) VALUES(?,?,?,?)", (session_id, title, now, now))
+            db.execute("INSERT OR IGNORE INTO sessions(id,title,owner_id,created_at,updated_at) VALUES(?,?,?,?,?)", (session_id, title, owner_id, now, now))
             db.execute("UPDATE sessions SET updated_at=? WHERE id=?", (now, session_id))
 
-    def append_message(self, session_id: str, role: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> None:
-        self.ensure_session(session_id, content[:30] if role == "user" else "新会话")
+    def append_message(self, session_id: str, role: str, content: str, metadata: Optional[Dict[str, Any]] = None, owner_id: str = "anonymous") -> None:
+        self.ensure_session(session_id, content[:30] if role == "user" else "新会话", owner_id=owner_id)
         with self._lock, self._connect() as db:
             db.execute("INSERT INTO messages(session_id,role,content,metadata_json,created_at) VALUES(?,?,?,?,?)", (session_id, role, content, json.dumps(metadata or {}, ensure_ascii=False), self._now()))
+
+    def add_memory(
+        self,
+        user_id: str,
+        content: str,
+        memory_type: str = "fact",
+        source_session_id: str = "",
+        source_message_id: Optional[int] = None,
+        confidence: float = 0.5,
+        expires_at: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Create a user-scoped memory record."""
+        now = self._now()
+        with self._lock, self._connect() as db:
+            cursor = db.execute(
+                "INSERT INTO memories(user_id,memory_type,content,source_session_id,source_message_id,confidence,status,version,valid_from,expires_at,metadata_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (str(user_id), str(memory_type), str(content), str(source_session_id), source_message_id,
+                 max(0.0, min(1.0, float(confidence))), "active", 1, now, expires_at,
+                 json.dumps(metadata or {}, ensure_ascii=False), now, now),
+            )
+            row = db.execute("SELECT * FROM memories WHERE id=?", (cursor.lastrowid,)).fetchone()
+            return self._memory_dict(row)
+
+    def list_memories(self, user_id: str, status: Optional[str] = "active") -> List[Dict[str, Any]]:
+        query = "SELECT * FROM memories WHERE user_id=?"
+        params: List[Any] = [str(user_id)]
+        if status:
+            query += " AND status=?"
+            params.append(status)
+        query += " ORDER BY updated_at DESC, id DESC"
+        with self._connect() as db:
+            return [self._memory_dict(row) for row in db.execute(query, params).fetchall()]
+
+    def update_memory(self, memory_id: int, user_id: str, **changes: Any) -> Optional[Dict[str, Any]]:
+        allowed = {"content", "memory_type", "confidence", "status", "expires_at", "metadata_json"}
+        values = {key: value for key, value in changes.items() if key in allowed}
+        if not values:
+            return self.get_memory(memory_id, user_id)
+        values["version"] = "version + 1"
+        values["updated_at"] = self._now()
+        assignments = []
+        params: List[Any] = []
+        for key, value in values.items():
+            if key == "version":
+                assignments.append("version=version+1")
+            else:
+                assignments.append(f"{key}=?")
+                params.append(value)
+        params.extend([int(memory_id), str(user_id)])
+        with self._lock, self._connect() as db:
+            db.execute(f"UPDATE memories SET {', '.join(assignments)} WHERE id=? AND user_id=?", params)
+            row = db.execute("SELECT * FROM memories WHERE id=? AND user_id=?", (int(memory_id), str(user_id))).fetchone()
+            return self._memory_dict(row) if row else None
+
+    def get_memory(self, memory_id: int, user_id: str) -> Optional[Dict[str, Any]]:
+        with self._connect() as db:
+            row = db.execute("SELECT * FROM memories WHERE id=? AND user_id=?", (int(memory_id), str(user_id))).fetchone()
+            return self._memory_dict(row) if row else None
+
+    def delete_memory(self, memory_id: int, user_id: str) -> bool:
+        return self.update_memory(memory_id, user_id, status="deleted") is not None
+
+    @staticmethod
+    def _memory_dict(row: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
+        if row is None:
+            return None
+        data = dict(row)
+        try:
+            data["metadata"] = json.loads(data.pop("metadata_json", "{}") or "{}")
+        except json.JSONDecodeError:
+            data["metadata"] = {}
+        return data
 
     def get_messages(self, session_id: str) -> Optional[List[Dict[str, Any]]]:
         with self._connect() as db:

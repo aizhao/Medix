@@ -207,6 +207,7 @@ class ShortTermMemory:
             return self._load_from_redis(session_id)
         return None
 
+
     def get_recent_messages(
         self,
         session_id: str,
@@ -319,4 +320,54 @@ class ShortTermMemory:
         except Exception as e:
             logger.error(f"Failed to load from Redis: {e}")
 
+        return None
+
+
+class SQLiteShortTermMemory:
+    """SQLite-backed read-through memory used by the HTTP API.
+
+    The API boundary writes user/assistant messages to ``SQLiteStore``. AgentLoop
+    receives the same interface, while its write callbacks are no-ops so there
+    is no second in-memory conversation history.
+    """
+
+    storage_type = "sqlite"
+
+    def __init__(self, store: Any):
+        self.store = store
+        self.entropy_manager = MemoryEntropyManager() if ENTROPY_ENABLED else None
+        self._pending_questions: Dict[str, str] = {}
+
+    def begin_turn(self, session_id: str, question: str) -> None:
+        """Hide the API's just-persisted user message from prior-turn history."""
+        self._pending_questions[session_id] = question
+
+    def add_message(self, session_id: str, role: str, content: str) -> None:
+        # backend.app persists the request/response at the API boundary.
+        return None
+
+    def get_recent_messages(self, session_id: str, limit: int = 50) -> List[Dict[str, str]]:
+        messages = list(self.store.get_messages(session_id) or [])[-limit:]
+        pending = self._pending_questions.get(session_id)
+        if pending and messages and messages[-1].get("role") == "user" and messages[-1].get("content") == pending:
+            messages.pop()
+        if self.entropy_manager and messages:
+            messages = self.entropy_manager.auto_clean(
+                messages, enable_deduplication=True, enable_compression=True, max_messages=limit
+            )
+        return messages
+
+    def get_history(self, session_id: str, limit: int = 10) -> List[Dict[str, str]]:
+        messages = self.get_recent_messages(session_id, limit * 2)
+        return [
+            {"role": msg["role"], "content": msg["content"]}
+            for msg in messages
+            if msg.get("role") in {"user", "assistant"}
+        ]
+
+    def create_session(self, session_id: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+        self.store.ensure_session(session_id)
+
+    def clear_session(self, session_id: str) -> None:
+        # Conversation deletion is owned by SQLiteStore/API, not AgentLoop.
         return None

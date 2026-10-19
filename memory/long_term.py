@@ -12,7 +12,7 @@ Mem0 优势：
 - 内置去重和摘要
 """
 from typing import Dict, List, Any, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 from loguru import logger
 import os
 import sys
@@ -104,6 +104,7 @@ class LongTermMemory:
         session_id: str,
         question: str,
         answer: str,
+        user_id: str = "anonymous",
         metadata: Optional[Dict[str, Any]] = None
     ) -> Optional[str]:
         """
@@ -123,16 +124,22 @@ class LongTermMemory:
 
         try:
             # 构建记忆文本（包含问题和答案摘要）
-            memory_text = f"问题：{question}\\n回答：{answer[:500]}..."
+            memory_text = f"问题：{question[:2000]}\\n回答：{answer[:2000]}"
+            now = datetime.now()
 
             # 添加到 Mem0
             result = self.mem0.add(
                 messages=[{"role": "user", "content": memory_text}],
-                user_id="medix_user",  # 固定用户ID（可扩展为多用户）
+                user_id=user_id,
                 metadata={
                     "type": "session_summary",
                     "session_id": session_id,
-                    "timestamp": datetime.now().isoformat(),
+                    "user_id": user_id,
+                    "source": "conversation",
+                    "memory_version": now.strftime("%Y%m%d%H%M%S%f"),
+                    "timestamp": now.isoformat(),
+                    "expires_at": (now + timedelta(days=90)).isoformat(),
+                    "confidence": (metadata or {}).get("confidence", 0.7),
                     **(metadata or {})
                 }
             )
@@ -153,7 +160,8 @@ class LongTermMemory:
     def search_similar_sessions(
         self,
         query: str,
-        limit: int = 5
+        limit: int = 5,
+        user_id: str = "anonymous",
     ) -> List[Dict[str, Any]]:
         """
         搜索相似的历史会话（向量相似度搜索，自动去重）
@@ -171,7 +179,7 @@ class LongTermMemory:
         try:
             results = self.mem0.search(
                 query=query,
-                user_id="medix_user",
+                user_id=user_id,
                 limit=limit * 2  # 多获取一些以便去重后有足够结果
             )
 
@@ -214,5 +222,3 @@ class LongTermMemory:
         except Exception as e:
             logger.error(f"Failed to search similar sessions: {e}")
             return []
-
-

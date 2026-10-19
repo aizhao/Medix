@@ -9,7 +9,7 @@ from backend.storage import SQLiteStore
 
 
 class FakeCoordinator:
-    async def process(self, question, context=None, session_id=None, enable_swarm=None):
+    async def process(self, question, context=None, session_id=None, enable_swarm=None, user_id="anonymous"):
         return {
             "answer": f"已收到：{question}",
             "swarm_enabled": False,
@@ -66,7 +66,7 @@ class ApiTests(unittest.TestCase):
 
     def test_answer_artifacts_persist_with_session(self):
         class EvidenceCoordinator:
-            async def process(self, question, context=None, session_id=None, enable_swarm=None):
+            async def process(self, question, context=None, session_id=None, enable_swarm=None, user_id="anonymous"):
                 return {
                     "answer": "结论 [kb-demo]",
                     "swarm_enabled": False,
