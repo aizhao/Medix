@@ -1,0 +1,52 @@
+# LLM和模型
+openai>=1.33.0,<2.0.0
+# 5.3.x requires newer Python; 5.1.2 supports the project's Python 3.9 runtime.
+sentence-transformers==5.1.2
+# Pin the CPU-compatible release used by this project. Leaving this open-ended
+# currently resolves to PyTorch 2.14 on Linux/ARM and pulls hundreds of MB of
+# CUDA packages that the API container never uses.
+torch==2.8.0
+transformers>=4.41.0,<5.0.0
+
+# Agent框架
+pydantic==2.10.0
+pydantic-settings==2.7.0
+
+# 记忆管理
+mem0ai==0.1.0
+redis==5.2.0
+qdrant-client==1.12.0
+
+# 向量数据库（Milvus）
+pymilvus[milvus_lite]>=2.3.0
+# sentence-transformers 已在上方定义
+
+# 搜索和研究
+requests==2.32.0
+beautifulsoup4==4.12.3
+ddgs==9.16.0
+
+# 数据处理
+pandas>=2.0.0
+numpy>=1.24.0
+
+# 文档解析（PDF/Word/Excel）
+pymupdf>=1.24.0
+pdfplumber>=0.11.0
+python-docx>=1.1.0
+openpyxl>=3.1.0
+
+# 工具
+loguru==0.7.3
+python-dotenv==1.0.1
+pyyaml==6.0.3
+tqdm>=4.65.0
+
+# 异步支持
+aiohttp>=3.8.0
+httpx>=0.24.0
+
+# HTTP backend
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9

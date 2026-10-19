@@ -1,0 +1,49 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      MEDIX_DB_PATH: /app/data/medix.db
+      MEDIX_MILVUS_DB_PATH: /app/knowledge/data/milvus_lite.db
+      MEDIX_REDIS_URL: redis://redis:6379/0
+      MEDIX_EMBEDDING_MODEL: ${MEDIX_EMBEDDING_MODEL:-BAAI/bge-small-zh-v1.5}
+      MEDIX_KB_SOURCE_TYPES: ${MEDIX_KB_SOURCE_TYPES:-clinical_guideline,drug_label,textbook,research,standard,document,unclassified}
+      MEDIX_RETRIEVAL_PER_SOURCE: ${MEDIX_RETRIEVAL_PER_SOURCE:-3}
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
+      HF_HOME: /root/.cache/huggingface
+      HF_HUB_DOWNLOAD_TIMEOUT: ${HF_HUB_DOWNLOAD_TIMEOUT:-120}
+      HF_HUB_ETAG_TIMEOUT: ${HF_HUB_ETAG_TIMEOUT:-120}
+      MEDIX_LLM_API_KEY: ${MEDIX_LLM_API_KEY:-}
+      MEDIX_LLM_BASE_URL: ${MEDIX_LLM_BASE_URL:-https://llm-2puaenj268eae9bv.cn-beijing.maas.aliyuncs.com/compatible-mode/v1}
+      MEDIX_LLM_MODEL: ${MEDIX_LLM_MODEL:-qwen3.8-max}
+      MEDIX_LLM_TEMPERATURE: ${MEDIX_LLM_TEMPERATURE:-0.7}
+      MEDIX_LLM_MAX_TOKENS: ${MEDIX_LLM_MAX_TOKENS:-8192}
+      MEM0_API_KEY: ${MEM0_API_KEY:-}
+    volumes:
+      - medix_data:/app/data
+      - medix_milvus:/app/knowledge/data
+      - hf_cache:/root/.cache/huggingface
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: docker.1ms.run/redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  medix_data:
+  medix_milvus:
+  redis_data:
+  hf_cache:
