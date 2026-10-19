@@ -319,7 +319,7 @@ async def update_document_metadata(document_id: int, request: Request) -> dict[s
         raise HTTPException(status_code=404, detail="document not found")
     payload = await request.json()
     changes = {}
-    for key in ("category", "source_type", "authority_level"):
+    for key in ("category", "source_type", "authority_level", "source_url", "publisher", "license", "external_id", "corpus_id", "language", "published_at"):
         if key in payload and payload[key] is not None:
             changes[key] = str(payload[key])[:100]
     if "tags" in payload:
@@ -518,6 +518,9 @@ def _parse_document_job(store: SQLiteStore, document_id: int, job_id: str, path:
             chunk.setdefault("metadata", {})["category"] = category
             chunk["metadata"]["source_type"] = document.get("source_type", "internal")
             chunk["metadata"]["authority_level"] = document.get("authority_level", "unknown")
+            for key in ("source_url", "publisher", "license", "external_id", "corpus_id", "language", "published_at"):
+                if document.get(key):
+                    chunk["metadata"][key] = document[key]
             if category != "unclassified":
                 chunk["metadata"]["type"] = category
         if not chunks:
@@ -559,6 +562,7 @@ def _index_document_job(store: SQLiteStore, document_id: int, job_id: str) -> No
         # Auto-ID collections need an application-level cleanup before retry;
         # otherwise a partially failed job could create duplicate vectors.
         kb.delete_by_document_record_id(document_id)
+        # document_to_chunks 已执行统一 token 上限和语义边界切分。
         count = kb.add_documents(documents, chunk_size=0)
         store.update_job(job_id, status="completed", progress=100, stage="indexed", finished_at=store._now())
         store.update_document_status(document_id, "indexed", progress=100, current_stage="indexed", indexed_chunks=count, error_code="", error_message="", finished_at=store._now())

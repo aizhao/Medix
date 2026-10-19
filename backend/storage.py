@@ -46,6 +46,8 @@ class SQLiteStore:
                 path TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'uploaded',
                 category TEXT NOT NULL DEFAULT 'unclassified', tags_json TEXT NOT NULL DEFAULT '[]',
                 source_type TEXT NOT NULL DEFAULT 'internal', authority_level TEXT NOT NULL DEFAULT 'unknown', mime_type TEXT NOT NULL DEFAULT '',
+                source_url TEXT NOT NULL DEFAULT '', publisher TEXT NOT NULL DEFAULT '', license TEXT NOT NULL DEFAULT '',
+                external_id TEXT NOT NULL DEFAULT '', corpus_id TEXT NOT NULL DEFAULT '', language TEXT NOT NULL DEFAULT '', published_at TEXT NOT NULL DEFAULT '',
                 size_bytes INTEGER NOT NULL DEFAULT 0, sha256 TEXT NOT NULL DEFAULT '',
                 version INTEGER NOT NULL DEFAULT 1, progress INTEGER NOT NULL DEFAULT 0,
                 current_stage TEXT NOT NULL DEFAULT 'uploaded', total_chunks INTEGER NOT NULL DEFAULT 0,
@@ -80,6 +82,8 @@ class SQLiteStore:
             migrations = {
                 "category": "TEXT NOT NULL DEFAULT 'unclassified'", "tags_json": "TEXT NOT NULL DEFAULT '[]'",
                 "source_type": "TEXT NOT NULL DEFAULT 'internal'", "authority_level": "TEXT NOT NULL DEFAULT 'unknown'", "mime_type": "TEXT NOT NULL DEFAULT ''",
+                "source_url": "TEXT NOT NULL DEFAULT ''", "publisher": "TEXT NOT NULL DEFAULT ''", "license": "TEXT NOT NULL DEFAULT ''",
+                "external_id": "TEXT NOT NULL DEFAULT ''", "corpus_id": "TEXT NOT NULL DEFAULT ''", "language": "TEXT NOT NULL DEFAULT ''", "published_at": "TEXT NOT NULL DEFAULT ''",
                 "size_bytes": "INTEGER NOT NULL DEFAULT 0", "sha256": "TEXT NOT NULL DEFAULT ''",
                 "version": "INTEGER NOT NULL DEFAULT 1", "progress": "INTEGER NOT NULL DEFAULT 0",
                 "current_stage": "TEXT NOT NULL DEFAULT 'uploaded'", "total_chunks": "INTEGER NOT NULL DEFAULT 0",
@@ -132,9 +136,20 @@ class SQLiteStore:
 
     def add_document(self, filename: str, path: str, status: str = "uploaded", **metadata: Any) -> Dict[str, Any]:
         now = self._now()
-        values = (filename, path, status, metadata.get("category", "unclassified"), json.dumps(metadata.get("tags", []), ensure_ascii=False), metadata.get("source_type", "internal"), metadata.get("authority_level", "unknown"), metadata.get("mime_type", ""), int(metadata.get("size_bytes", 0) or 0), metadata.get("sha256", ""), now, now, status)
+        values = (
+            filename, path, status, metadata.get("category", "unclassified"),
+            json.dumps(metadata.get("tags", []), ensure_ascii=False),
+            metadata.get("source_type", "internal"), metadata.get("authority_level", "unknown"),
+            metadata.get("mime_type", ""), metadata.get("source_url", ""), metadata.get("publisher", ""),
+            metadata.get("license", ""), metadata.get("external_id", ""), metadata.get("corpus_id", ""),
+            metadata.get("language", ""), metadata.get("published_at", ""),
+            int(metadata.get("size_bytes", 0) or 0), metadata.get("sha256", ""), now, now, status,
+        )
         with self._lock, self._connect() as db:
-            cursor = db.execute("INSERT INTO documents(filename,path,status,category,tags_json,source_type,authority_level,mime_type,size_bytes,sha256,created_at,updated_at,current_stage) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", values)
+            cursor = db.execute(
+                "INSERT INTO documents(filename,path,status,category,tags_json,source_type,authority_level,mime_type,source_url,publisher,license,external_id,corpus_id,language,published_at,size_bytes,sha256,created_at,updated_at,current_stage) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                values,
+            )
             row = db.execute("SELECT * FROM documents WHERE id=?", (cursor.lastrowid,)).fetchone()
             return self._document_dict(row)
 
@@ -154,6 +169,12 @@ class SQLiteStore:
             row = db.execute("SELECT * FROM documents WHERE sha256=? ORDER BY id DESC LIMIT 1", (sha256,)).fetchone()
             return self._document_dict(row) if row else None
 
+    def find_document_by_path(self, path: str) -> Optional[Dict[str, Any]]:
+        """Find the latest registered document for a stable batch-import path."""
+        with self._connect() as db:
+            row = db.execute("SELECT * FROM documents WHERE path=? ORDER BY id DESC LIMIT 1", (path,)).fetchone()
+            return self._document_dict(row) if row else None
+
     @staticmethod
     def _document_dict(row: sqlite3.Row) -> Dict[str, Any]:
         data = dict(row)
@@ -164,7 +185,7 @@ class SQLiteStore:
         return data
 
     def update_document(self, document_id: int, **changes: Any) -> bool:
-        allowed = {"status", "category", "tags_json", "source_type", "authority_level", "version", "progress", "current_stage", "total_chunks", "indexed_chunks", "error_code", "error_message", "retry_count", "started_at", "finished_at", "updated_at"}
+        allowed = {"status", "category", "tags_json", "source_type", "authority_level", "source_url", "publisher", "license", "external_id", "corpus_id", "language", "published_at", "mime_type", "size_bytes", "sha256", "version", "progress", "current_stage", "total_chunks", "indexed_chunks", "error_code", "error_message", "retry_count", "started_at", "finished_at", "updated_at"}
         values = {key: value for key, value in changes.items() if key in allowed}
         if not values:
             return False

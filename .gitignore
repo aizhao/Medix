@@ -11,6 +11,8 @@ build/
 develop-eggs/
 dist/
 downloads/
+data/uploads/minibench-*/
+data/eval_corpus/
 eggs/
 .eggs/
 lib/

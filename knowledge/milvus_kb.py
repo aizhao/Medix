@@ -17,6 +17,9 @@ from loguru import logger
 
 from pymilvus import MilvusClient
 from sentence_transformers import SentenceTransformer
+from dataclasses import replace
+
+from knowledge.chunking import DEFAULT_POLICY, split_text
 
 
 def delete_document_vectors(
@@ -131,38 +134,32 @@ class MedicalKnowledgeBase:
 
         self._initialized = True
 
-    def _chunk_text(self, text: str, chunk_size: int = 1024, overlap: int = 100) -> List[str]:
+    def _chunk_text(self, text: str, chunk_size: Optional[int] = None, overlap: int = 0) -> List[str]:
         """
         分块文本
 
         Args:
             text: 原始文本
-            chunk_size: 块大小（字符数）
-            overlap: 重叠字符数
+            chunk_size: 兼容旧调用参数；新逻辑统一使用 token 策略
 
         Returns:
             文本块列表
         """
-        if len(text) <= chunk_size:
+        if chunk_size is not None and chunk_size <= 0:
             return [text]
+        policy = DEFAULT_POLICY if chunk_size is None else replace(DEFAULT_POLICY, max_tokens=chunk_size)
+        # 使用 embedding 模型自带 tokenizer，确保切分上限与实际向量化模型一致。
+        model = getattr(self, "embedding_model", None)
+        model_tokenizer = getattr(model, "tokenizer", None)
+        return split_text(text, policy, tokenizer=model_tokenizer)
 
-        chunks = []
-        start = 0
-        while start < len(text):
-            end = start + chunk_size
-            chunk = text[start:end]
-            chunks.append(chunk)
-            start = end - overlap  # 重叠
-
-        return chunks
-
-    def add_documents(self, documents: List[Dict[str, Any]], chunk_size: int = 1024) -> int:
+    def add_documents(self, documents: List[Dict[str, Any]], chunk_size: Optional[int] = None) -> int:
         """
         添加文档到知识库（支持分块）
 
         Args:
             documents: 文档列表，每个文档包含 id, content, metadata
-            chunk_size: 分块大小（字符数），默认 1024
+            chunk_size: 传 0 表示文档已按统一策略切分；其他情况使用 token/句子策略
 
         Returns:
             成功添加的文档块数量
@@ -178,7 +175,7 @@ class MedicalKnowledgeBase:
         for doc in documents:
             # Ingestion jobs pass already-persisted chunks with chunk_size=0 so
             # the SQLite chunk record and Milvus vector remain one-to-one.
-            chunks = [doc["content"]] if chunk_size <= 0 else self._chunk_text(doc["content"], chunk_size=chunk_size)
+            chunks = [doc["content"]] if chunk_size == 0 else self._chunk_text(doc["content"], chunk_size=chunk_size)
             for i, chunk in enumerate(chunks):
                 metadata = doc.get("metadata", {}).copy()
                 metadata["doc_id"] = doc["id"]

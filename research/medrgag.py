@@ -69,7 +69,7 @@ class EvidenceDocument:
             data["heading_path"] = self.heading_path
         data["excerpt"] = self.text[:600]
         # Preserve the join keys needed by the citation detail endpoint.
-        for key in ("document_record_id", "chunk_id", "page", "filename", "source", "version", "content_fetched", "domain"):
+        for key in ("document_record_id", "chunk_id", "page", "filename", "source", "source_url", "publisher", "license", "external_id", "corpus_id", "language", "published_at", "version", "content_fetched", "domain"):
             if key in self.metadata:
                 data[key] = self.metadata[key]
         if self.is_generated:
@@ -276,7 +276,7 @@ def evidence_from_kb(doc: Dict[str, Any]) -> EvidenceDocument:
         text=str(doc.get("content") or ""),
         title=title,
         source_kind=doc_type,
-        url_or_path=str(metadata.get("url") or metadata.get("source") or ""),
+        url_or_path=str(metadata.get("source_url") or metadata.get("url") or metadata.get("source") or ""),
         authority=authority,
         retrieval_score=float(doc.get("score") or 0.0),
         status="retrieved",

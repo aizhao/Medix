@@ -104,7 +104,7 @@ export MEDIX_LLM_BASE_URL="https://api.openai.com/v1"
 ### 4. 初始化知识库
 
 ```bash
-python knowledge/scripts/import_hardcoded_data.py
+python knowledge/scripts/import_documents.py knowledge/data/documents
 ```
 
 ### 5. 启动全栈 MVP
@@ -257,7 +257,7 @@ medix-agent-swarm/
 │   │   └── milvus_lite.db             # 向量数据库（自动生成）
 │   └── scripts/
 │       ├── __init__.py
-│       └── import_hardcoded_data.py   # 数据导入脚本
+│       └── import_documents.py         # 多格式结构化导入脚本
 │
 ├── research/                          # DeepResearch 模块
 │   ├── __init__.py
@@ -505,7 +505,7 @@ python examples/test_all.py
 - **向量数据库**: Milvus Lite（本地文件，无需服务器）
 - **Embedding 模型**: BAAI/bge-small-zh-v1.5（中文，512维）
 - **数据存储**: `knowledge/data/documents/` (txt 文档)
-- **初始化**: `python knowledge/scripts/import_hardcoded_data.py`
+- **初始化**: `python knowledge/scripts/import_documents.py knowledge/data/documents`
 
 ## 📅 开发路线图
 
@@ -612,7 +612,7 @@ python examples/test_all.py
   - [x] 生活方式建议（5种疾病）
   - [x] ICD-10疾病编码（20+疾病）
   - [x] 临床指南（10+指南）
-  - [x] 数据导入脚本（knowledge/scripts/import_hardcoded_data.py）
+  - [x] 多格式结构化数据导入（knowledge/scripts/import_documents.py）
 
 - [x] **Skills 重构**
   - [x] `search_knowledge` → Milvus 语义检索
