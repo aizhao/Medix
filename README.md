@@ -1,757 +1,376 @@
-# MediX多智能体医疗助手
+# MediX 多智能体医疗助手
 
-基于 Skills-Agent 两层架构的多智能体协作医疗助手系统，融合 Agent Loop、Agent Swarm、记忆管理和 Milvus 知识库。
+> 面向医学问答的证据优先、多智能体协作与可追溯知识库系统。
 
-## 📋 项目概述
+MediX 是 Python + FastAPI + Vue 3 的医疗 AI 应用，将急症分流、来源平衡检索、KGCC/KADS 证据流程、Skills-Agent、Agent Swarm、SQLite 会话记忆和 Milvus Lite 知识库组合成一条可审计的问答链路。
 
-本项目采用创新的 **Skills-Agent 两层架构**，通过7个自包含的原子 Skills 和3个专业 Agent 协同工作，提供智能、专业的医疗服务。
+> **医疗安全声明**：本项目仅用于医学信息检索、健康教育和研究辅助，不能替代医生诊断、处方或急救服务。高风险或紧急情况请立即联系专业医务人员。
 
-### 🎯 核心特性
+## 项目简介
 
-- **🔧 Skills 直达架构**: 7个原子 Skills 自包含，直接转换为 OpenAI function calling 格式 ✅
-- **🤖 Agent Loop**: LLM 驱动的 Skill 调用循环，Agent 自主规划、调用 Skills 并完成任务 ✅
-- **🐝 Agent Swarm**: 真正的群体智能（去中心化协作，自主任务认领，并行执行）✅
-- **🧠 记忆系统**: 短期记忆（会话级对话历史）+ 长期记忆（Mem0跨会话记忆）+ **多轮对话上下文利用** ✅
-- **💾 Milvus 知识库**: 统一知识管理，语义检索，支持模糊查询（"血压高" → "高血压"）✅
-- **⚡ Claude Code Skills**: 8个预定义技能（7个原子 + 1个复杂），一键调用医疗助手 ✅
-- **🏗️ Harness Engineering**: 约束驱动 + 熵管理，系统自动验证和优化，保证安全、简洁、高质量 ✅
+普通 LLM 能生成流畅的医学回答，但可能缺少来源、混淆证据等级，或在急症场景下继续生成不适当建议。MediX 把医学问答拆成可验证步骤：先识别急症和问题类型，再从本地知识库及医学网络来源检索证据，最后检查引用、来源权限和证据支持关系。
 
-## 🎯 Skills 直达架构
+项目适合医学知识检索、临床指南查询、症状风险初筛、研究资料整理和多轮问答原型，也提供带知识库管理、证据链和运行监控的全栈工作台。
 
-### 架构设计
+## 核心能力
 
-```
-Skills (函数) → 直接转换 → OpenAI Format → LLM 调用
-         ↓
-    Milvus/业务逻辑
-```
+### 证据优先医学问答
 
-### 关键特性
+- 确定性路由、分源检索、KGCC 原文处理、KADS 知识需求选择、证据综合和引用校验。
+- 答案带来源、片段、标题路径、检索分数和核验状态；证据失败时拒绝输出推测性医学结论。
 
-1. **Skills 直达 LLM**
-   - Skill 函数直接转换为 OpenAI function calling 格式
-   - SkillRegistry 统一管理：注册、执行、格式转换
+### Skills-Agent 与 Agent Swarm
 
-2. **简化的注册流程**
-   ```python
-   skill → OpenAI Format
-   ```
+- SkillRegistry 将 Python Skill 转为 OpenAI function calling 格式，Agent Loop 负责工具调用和迭代。
+- LeadAgent 分解复杂问题，ConsultationAgent、DiagnosticAgent 和 ResearchAgent 并行处理子任务，SharedContext 共享结果与事件。
+- 简单问题走单 Agent，复杂问题再启用 Swarm，兼顾成本与分析覆盖度。
 
-3. **Agent 灵活选择**
-   - 每个 Agent 注册全部7个 Skills
-   - Agent Loop 根据任务自主选择合适的 Skills
-   - 一个 Agent 可以跨领域调用 Skills
+### 多格式知识库
 
-4. **用户友好入口**
-   - 7个原子 Skills：快速查询，立即响应
-   - 1个复杂 Skill：触发 Swarm 协作
-   - 用户无需理解 Agent 架构
+- 支持 PDF、DOCX、XLSX、XLSM、TXT 和 Markdown。
+- 统一解析为中间表示，按标题树、表格行组和逻辑主题边界切分，并保留标题路径、版本、来源类型和 chunk ID。
 
-5. **多轮对话支持**
-   - 短期记忆：会话级对话历史（10条消息）
-   - 长期记忆：Mem0 跨会话记忆
-   - **上下文利用率 100%**：追问能正确理解历史对话
+### 统一会话与 Harness 约束
 
-### 测试验证
+- HTTP API、CLI 和 Agent Loop 复用 SQLite 会话事实源；Mem0 作为可选跨会话语义记忆。
+- YAML 定义 Agent 能力边界，运行时校验 Skill 调用和输出，并自动补充免责声明、高危提醒和记忆熵管理。
 
-**所有测试通过（26个测试用例，100% 通过率）**：
+## 效果展示
 
-**核心功能**：
-- ✅ Agent Loop 和 Skill 调用
-- ✅ Agent Swarm 群体智能
-- ✅ 记忆系统（短期+长期）
-- ✅ 多轮对话上下文利用 🌟
-- ✅ Skills 自主选择
-- ✅ Milvus 知识库集成
+![知识库桌面端](output/playwright/beautiful-knowledge-desktop.png)
 
-**Harness Engineering（Phase 8）**：
-- ✅ 约束系统（Skill 调用验证、输出验证、自动修复）
-- ✅ 熵管理（去重、压缩、熵估算）
-- ✅ Agent Loop 集成（约束 + 熵管理协同工作）
+![聊天桌面端](output/playwright/beautiful-chat-desktop.png)
 
-运行测试套件：
-```bash
-# 运行所有测试（包含 Harness Engineering）
-python examples/test_all.py
-```
+## 应用场景
 
-## 🚀 从零开始运行
+- 健康咨询原型、临床指南检索、复杂症状风险分析。
+- 医疗研究辅助、知识库运营和可追溯证据问答。
 
-### 1. 环境准备
+## 安装部署
 
-```bash
-conda create -n medix-swarm python=3.12 -y
-conda activate medix-swarm
-cd medix-agent-swarm
-```
+### 环境要求
 
-### 2. 安装依赖
+- Python 3.10+（Docker 使用 Python 3.12）
+- Node.js 22+ 与 npm（本地构建前端）
+- Docker Desktop 与 Docker Compose（容器部署）
+- OpenAI 兼容 LLM 接口；首次建库需要 BAAI/bge-small-zh-v1.5
 
-```bash
-pip install -r requirements.txt
-```
+### 方式一：让 AI 自己安装
 
-### 3. 配置 API
+~~~text
+请帮我部署 MediX：
+1. 克隆仓库：git clone git@github.com:aizhao/Medix.git
+2. 复制 .env.example 为 .env，填写 MEDIX_LLM_API_KEY
+3. 安装依赖或使用 Docker Compose
+4. 初始化知识库并启动 API
+5. 访问 /api/v1/health 和 /docs 验证安装
+~~~
 
-复制 `.env.example`，并通过环境变量配置（也可直接导出变量）：
+### 方式二：Docker Compose
 
-```bash
-export MEDIX_LLM_API_KEY="your-llm-api-key"
-export MEDIX_LLM_MODEL="your-model-name"
-export MEDIX_LLM_BASE_URL="https://api.openai.com/v1"
-```
-
-### 4. 初始化知识库
-
-```bash
-python knowledge/scripts/import_documents.py knowledge/data/documents
-```
-
-### 5. 配置 Codex 提交信息钩子
-
-```bash
-git config core.hooksPath .githooks
-chmod +x .githooks/prepare-commit-msg
-```
-
-执行不带 `-m` 的 `git commit` 时，钩子会根据暂存区 diff 调用 Codex 生成中文候选提交信息，随后打开 Git 编辑器供人工确认和修改。
-
-### 6. 启动全栈 MVP
-
-项目现在提供 FastAPI 后端和 Vue 3 前端工作台。先配置 `MEDIX_LLM_API_KEY`，然后执行：
-
-```bash
-conda activate medix-swarm
-cd frontend && npm install && npm run build && cd ..
-uvicorn backend.app:app --host 0.0.0.0 --port 8000 --reload
-```
-
-浏览器访问 <http://localhost:8000/>；接口文档访问 <http://localhost:8000/docs>。
-
-主要接口：
-
-- `GET /api/v1/health`：服务健康检查
-- `GET /api/v1/ready`：数据库、上传目录和模型配置就绪检查
-- `POST /api/v1/chat`：提交医学问题
-- `GET /api/v1/sessions/{session_id}`：读取 SQLite 持久化会话
-- `POST /api/v1/knowledge/upload`：保存原文件并记录 SHA256
-- `POST /api/v1/knowledge/documents/{id}/parse`：手动解析并持久化 chunks
-- `POST /api/v1/knowledge/documents/{id}/index`：确认后生成向量并写入 Milvus
-- `PATCH /api/v1/knowledge/documents/{id}`：修改分类、标签、来源类型和权威等级
-- `GET /api/v1/knowledge/documents/{id}/file`：下载原文件
-- `GET /api/v1/knowledge/documents/{id}/parsed`：读取解析结果和切片
-- `GET /api/v1/knowledge/documents/{id}/chunks`：查看解析切片
-- `GET /api/v1/knowledge/citations/{citation_id}`：查看引用对应的本地 chunk
-- `GET /api/v1/knowledge/jobs/{job_id}`：查看任务进度和失败原因
-
-当前全栈版本使用 SQLite 持久化会话、文档、解析任务和 chunks；原文件与 SQLite 位于 `medix_data` volume，Milvus Lite 位于独立的 `medix_milvus` volume。前端包含临床问答、证据链、知识库管理和运行监控页面。生产部署仍需补充鉴权和多实例任务队列。
-
-医学事实型问题采用强制证据流程，不再依赖 Agent 自主选择检索工具：
-
-1. 确定性路由与急症信号分流；
-2. 按临床指南、药品说明书、教材、论文等语料分别等额检索；
-3. KGCC 逐文档摘要、识别最多 3 个知识缺口并生成补充背景；
-4. KADS 持久化知识需求、需求到文档映射、无关文档与最终选择理由；
-5. 最终结论逐条执行引用存在性和证据支持性核验，高风险问题还必须包含权威来源；
-6. 生成背景只能参与推理，不能作为引用。证据不足或核验失败时拒绝输出推测性医学结论。
-
-分源检索可通过 `MEDIX_KB_SOURCE_TYPES` 配置语料类型，通过 `MEDIX_RETRIEVAL_PER_SOURCE` 配置每个语料、每条查询的候选配额。知识库中文档的分类会写入 Milvus metadata，并作为独立语料过滤条件。
-
-```bash
+~~~bash
+git clone git@github.com:aizhao/Medix.git
+cd Medix
 cp .env.example .env
-# 在 .env 中填写 MEDIX_LLM_API_KEY
-./scripts/start.sh
-```
+# 编辑 .env，至少填写 MEDIX_LLM_API_KEY
+docker compose up --build
+~~~
 
-Docker Compose 会启动 FastAPI、Vue 构建产物和 Redis；当前本地会话主存储为 SQLite，Redis 已作为基础设施预留。
+访问 http://localhost:8000/、http://localhost:8000/docs 和 http://localhost:8000/api/v1/health。
 
-### 6. 运行测试
+### 方式三：本地安装
 
-```bash
+~~~bash
+git clone git@github.com:aizhao/Medix.git
+cd Medix
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+cd frontend && npm ci && npm run build && cd ..
+python knowledge/scripts/import_documents.py knowledge/data/documents
+uvicorn backend.app:app --host 0.0.0.0 --port 8000 --reload
+~~~
+
+也可以运行 ./scripts/start.sh 启动 Compose 环境。
+
+## 快速开始
+
+~~~bash
+uvicorn backend.app:app --host 0.0.0.0 --port 8000 --reload
+~~~
+
+浏览器打开 http://localhost:8000/；命令行交互运行 python main.py。
+
+~~~bash
+python -m pytest -q
 python examples/test_all.py
-```
+~~~
 
-### 7. CLI 使用
+## 使用说明
 
-```bash
-python main.py
-```
+### Web 工作台
 
-## 📦 项目结构
+1. 在聊天页输入问题，系统自动选择急症、证据优先、单 Agent 或 Swarm 路径。
+2. 在证据栏查看来源、excerpt、标题路径、文档记录 ID、chunk ID 和核验状态。
+3. 在知识库页上传文档，执行解析，再确认索引；失败任务可以重试。
 
-```
+### API 示例
+
+~~~bash
+curl http://localhost:8000/api/v1/health
+
+curl -X POST http://localhost:8000/api/v1/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"高血压患者日常生活需要注意什么？","user_id":"demo-user","enable_swarm":true}'
+~~~
+
+上传、解析和索引：
+
+~~~bash
+curl -X POST http://localhost:8000/api/v1/knowledge/upload \
+  -F 'file=@knowledge/data/documents/20_guideline_hypertension.txt' \
+  -F 'category=clinical_guideline'
+curl -X POST http://localhost:8000/api/v1/knowledge/documents/{document_id}/parse
+curl -X POST http://localhost:8000/api/v1/knowledge/documents/{document_id}/index
+~~~
+
+### 主要 API
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| GET | /api/v1/health | 健康检查 |
+| GET | /api/v1/ready | 依赖与配置就绪检查 |
+| POST | /api/v1/chat | 结构化医学问答 |
+| POST | /api/v1/chat/stream | SSE 流式问答 |
+| GET | /api/v1/sessions/{session_id} | 读取会话 |
+| GET/POST | /api/v1/memories | 用户作用域记忆 |
+| POST | /api/v1/knowledge/upload | 上传多格式文档 |
+| POST | /api/v1/knowledge/documents/{id}/parse | 解析并持久化 chunks |
+| POST | /api/v1/knowledge/documents/{id}/index | 写入 Milvus Lite |
+| GET | /api/v1/knowledge/jobs/{job_id} | 查询任务状态 |
+| GET | /api/v1/knowledge/citations/{citation_id} | 定位本地引用 chunk |
+
+## 系统架构
+
+~~~mermaid
+flowchart TD
+    User[用户] --> Web[Vue 3 工作台]
+    User --> CLI[main.py CLI]
+    Web --> API[FastAPI]
+    CLI --> Coordinator[SwarmCoordinator]
+    API --> Coordinator
+    Coordinator --> Route[确定性路由]
+    Route --> Safety[急症安全响应]
+    Route --> Evidence[证据优先流程]
+    Route --> Lead[LeadAgent]
+    Lead --> Single[单 Agent]
+    Lead --> Swarm[Agent Swarm]
+    Swarm --> C[ConsultationAgent]
+    Swarm --> D[DiagnosticAgent]
+    Swarm --> R[ResearchAgent]
+    Single --> Skills[SkillRegistry / Agent Loop]
+    C --> Skills
+    D --> Skills
+    R --> Skills
+    Evidence --> RAG[MedRGAG / 证据综合]
+    Skills --> KB[Milvus Lite]
+    RAG --> KB
+    RAG --> WebSearch[医学网络搜索]
+    Coordinator --> SQLite[(SQLite 会话/文档/任务/记忆)]
+    Coordinator -. 可选 .-> Mem0[Mem0 长期记忆]
+~~~
+
+## 核心工作流程
+
+~~~mermaid
+flowchart LR
+    Q[用户问题] --> M[SQLite 会话历史]
+    M --> L[Mem0 相似记忆]
+    L --> R{确定性路由}
+    R -->|急症| U[安全响应]
+    R -->|医学事实| S[分源检索]
+    S --> K[KGCC 原文处理]
+    K --> D[KADS 文档选择]
+    D --> G[证据综合]
+    R -->|一般任务| A[LeadAgent 分解]
+    A --> W[Worker 并行执行 Skills]
+    W --> G
+    G --> V[引用与证据校验]
+    U --> O[结构化回答]
+    V --> O
+    O --> P[写回 SQLite]
+~~~
+
+1. API 写入用户消息，以 session_id 和 user_id 建立隔离边界。
+2. Coordinator 读取最近历史并尝试加载 Mem0 相似案例。
+3. classify_query 先识别急症和医学证据型问题。
+4. 证据型问题进入来源平衡检索和 KGCC/KADS；一般问题由 LeadAgent 决定单 Agent 或 Swarm。
+5. Agent Loop 执行受限 Skill，Harness 校验调用和输出。
+6. API 检查引用是否存在，再返回答案、证据链和警告。
+
+## AI 工作流程
+
+### Agent 架构
+
+~~~mermaid
+flowchart TD
+    Router[SwarmCoordinator] --> Lead[LeadAgent]
+    Lead --> C[ConsultationAgent]
+    Lead --> D[DiagnosticAgent]
+    Lead --> R[ResearchAgent]
+    C --> Loop[Agent Loop]
+    D --> Loop
+    R --> Loop
+    Loop --> Registry[SkillRegistry]
+    Registry --> Tools[医学 Skills]
+    C --> Context[SharedContext]
+    D --> Context
+    R --> Context
+~~~
+
+Worker 共享知识库搜索、生活方式建议、风险评估、症状分析、ICD-10、临床指南、深度研究、会话历史和相似案例等 Skill。
+
+### RAG 与证据流程
+
+~~~mermaid
+flowchart TD
+    Doc[医学文档] --> Parse[多格式解析]
+    Parse --> Tree[标题树/表格语义化]
+    Tree --> Chunk[主题边界 + token 上限]
+    Chunk --> Embed[BGE 中文 Embedding]
+    Embed --> Store[(Milvus Lite)]
+    Query[医学问题] --> Search[按来源类型等额检索]
+    Store --> Search
+    Web[医学网络来源] --> Search
+    Search --> KGCC[KGCC 原文处理]
+    KGCC --> KADS[KADS 需求-文档选择]
+    KADS --> Synthesis[证据综合]
+    Synthesis --> Gate[引用与证据门禁]
+    Gate --> Answer[可追溯回答]
+~~~
+
+- 本地文档先按标题树和表格形成逻辑主题块，再按句子边界和 token 上限兜底。
+- 每类语料独立获取候选，避免大型语料挤占指南、药品说明书或教材配额。
+- 生成背景与可引用证据分离；引用不存在或证据不足时降级为警告或拒答。
+
+## 技术栈
+
+| 层级 | 技术 | 用途 |
+|---|---|---|
+| API | FastAPI + Uvicorn | REST、SSE、Swagger |
+| 前端 | Vue 3 + Vite | 聊天和知识库工作台 |
+| Agent | Python asyncio | Agent Loop 和并行 Worker |
+| LLM | OpenAI-compatible API | 路由、规划、工具调用和综合 |
+| Embedding | Sentence Transformers / BGE | 中文向量化 |
+| 向量库 | Milvus Lite | 本地语义检索 |
+| 关系存储 | SQLite | 会话、文档、任务和记忆 |
+| 可选长期记忆 | Mem0 | 跨会话相似记忆 |
+| 文档解析 | PyMuPDF、pdfplumber、python-docx、openpyxl | 多格式和表格抽取 |
+
+## 项目结构
+
+~~~text
 medix-agent-swarm/
-├── .claude/skills/                    # Claude Code Skills (10个)
-│   ├── search-knowledge/              # 搜索医学知识库
-│   │   └── script/
-│   │       ├── __init__.py
-│   │       └── search.py
-│   ├── assess-risk/                   # 风险评估
-│   │   └── script/
-│   │       ├── __init__.py
-│   │       └── risk.py
-│   ├── analyze-symptoms/              # 症状分析
-│   │   └── script/
-│   │       ├── __init__.py
-│   │       └── symptoms.py
-│   ├── recommend-lifestyle/           # 生活方式建议
-│   │   └── script/
-│   │       ├── __init__.py
-│   │       └── lifestyle.py
-│   ├── disease-code/                  # ICD-10疾病编码
-│   │   └── script/
-│   │       ├── __init__.py
-│   │       └── code.py
-│   ├── clinical-guideline/            # 临床指南检索
-│   │   └── script/
-│   │       ├── __init__.py
-│   │       └── guideline.py
-│   ├── deep-research/                 # 深度研究
-│   │   └── script/
-│   │       ├── __init__.py
-│   │       └── research.py
-│   ├── search-history/                # 搜索会话历史（短期记忆）
-│   │   └── script/search.py
-│   └── search-similar-cases/          # 搜索相似案例（长期记忆）
-│       └── script/search.py
-│
-├── agents/                            # Agent 实现
-│   ├── __init__.py
-│   ├── base_agent.py                  # Agent 基类
-│   ├── consultation_agent.py          # 健康咨询 Agent
-│   ├── diagnostic_agent.py            # 症状诊断 Agent
-│   ├── research_agent.py              # 医学研究 Agent
-│   └── skill_registry_mixin.py        # Skill 注册混入
-│
-├── core/                              # 核心引擎
-│   ├── __init__.py
-│   ├── agent_loop.py                  # Agent Loop（集成约束验证）
-│   ├── llm_client.py                  # LLM 客户端
-│   ├── skill_loader.py                # 动态加载 Skills
-│   ├── skill_registry.py              # Skill 注册表（直接转 OpenAI format，无 Tool 层）
-│   └── state_manager.py               # 状态管理
-│
-├── swarm/                             # Swarm 协调器
-│   ├── __init__.py
-│   ├── events.py                      # 事件驱动通信
-│   ├── lead_agent.py                  # 任务分解和汇总
-│   ├── shared_context.py              # 共享环境（信息素）
-│   └── swarm_coordinator.py           # 智能路由
-│
-├── memory/                            # 记忆管理（集成熵管理）
-│   ├── __init__.py
-│   ├── agent_identity.py              # Agent 身份管理
-│   ├── long_term.py                   # 长期记忆（Mem0）
-│   ├── short_term.py                  # 短期记忆（自动去重和压缩）
-│   ├── session_summary.py             # 会话总结
-│   ├── entropy_manager.py             # 熵管理器（Harness）
-│   ├── agents/                        # Agent 身份文件存储
-│   └── swarm/session_summaries/       # Swarm 会话总结存储
-│
-├── constraints/                       # 约束系统（Harness）
-│   ├── __init__.py
-│   ├── agent_constraints.yaml         # Agent 能力边界定义
-│   ├── swarm_constraints.yaml         # Swarm 协作规则
-│   └── validator.py                   # 运行时约束验证器
-│
-├── validation/                        # 输出验证和修复（Harness）
-│   ├── __init__.py
-│   └── auto_fixer.py                  # 自动修复器
-│
-├── knowledge/                         # Milvus 知识库
-│   ├── __init__.py
-│   ├── milvus_kb.py                   # 知识库封装
-│   ├── data/
-│   │   ├── documents/                 # 医学知识文档（txt）
-│   │   └── milvus_lite.db             # 向量数据库（自动生成）
-│   └── scripts/
-│       ├── __init__.py
-│       └── import_documents.py         # 多格式结构化导入脚本
-│
-├── research/                          # DeepResearch 模块
-│   ├── __init__.py
-│   ├── deep_research_workflow.py      # 深度研究工作流
-│   ├── evidence_synthesizer.py        # 证据综合器
-│   ├── knowledge_base.py              # 知识库（可选 Qdrant）
-│   └── web_search.py                  # 网络搜索
-│
-├── examples/
-│   └── test_all.py                    # 完整测试套件（26个测试）
-│
-├── main.py                            # 主入口（交互式对话）
-├── setup.py                           # 安装脚本
-├── requirements.txt                   # 依赖列表
-├── MediX代码解读.md                   # 代码解读文档
-└── README.md                          # 本文档
-```
-
-**架构说明**：
-- ✅ **直达架构**：Skills → OpenAI Format
-- ✅ **Skills 自包含**：每个 Skill 在 `script/` 目录下实现，直接调用知识库
-- ✅ **动态加载**：`skill_loader.py` 扫描 `.claude/skills/` 目录动态加载
-- ✅ **SkillRegistry**：统一管理 Skill 注册、执行、格式转换
-- ✅ **统一配置**：通过根目录 `config.py` 从环境变量加载，避免密钥写入代码
-- ✅ **记忆分离**：Agent 身份文件和会话总结分别存储在 `memory/agents/` 和 `memory/swarm/`
-
-## 🤖 Skills 和 Agent 清单
-
-### 7个原子 Skills（两层架构）
-
-**所有 Agent 共享以下 Skills**：
-
-| Skill | 功能 | 数据源 | 特点 |
-|-------|------|--------|------|
-| `search_knowledge` | 搜索医学知识库 | Milvus | 语义检索 |
-| `recommend_lifestyle` | 生活方式和用药建议 | Milvus | 个性化建议 |
-| `assess_risk` | 风险等级评估 | 规则引擎 | 高危症状识别 |
-| `analyze_symptoms` | 症状模式分析 | 规则引擎 | 多系统分析 |
-| `disease_code` | ICD-10疾病编码 | Milvus | 标准编码 |
-| `clinical_guideline` | 临床指南检索 | Milvus | 权威指南 |
-| `deep_research` | 深度研究 | 网络搜索 | 最新进展 |
-
-### 3个专业 Agent（自主选择 Skills）
-
-#### 1. ConsultationAgent（健康咨询）
-- **能力**: 通用健康咨询和生活方式指导
-- **注册 Skills**: 全部7个（自主选择合适的 Skills）
-- **常用 Skills**: `search_knowledge`, `recommend_lifestyle`
-
-#### 2. DiagnosticAgent（症状诊断）
-- **能力**: 症状分析、风险评估和鉴别诊断
-- **注册 Skills**: 全部7个（自主选择合适的 Skills）
-- **常用 Skills**: `assess_risk`, `analyze_symptoms`, `disease_code`
-
-#### 3. ResearchAgent（医学研究）
-- **能力**: 循证医学证据和权威指南检索
-- **注册 Skills**: 全部7个（自主选择合适的 Skills）
-- **常用 Skills**: `clinical_guideline`, `deep_research`
-
-### 2个协调 Agent
-
-- **LeadAgent**: 任务分解和结果汇总（非编排器）
-- **SwarmCoordinator**: 智能路由（简单问题→单Agent，复杂问题→Swarm）
-
-### Skills 架构特点
-
-- ✅ **直达架构**: Skills → OpenAI Format
-- ✅ **Skills 自包含**: 直接调用 Milvus 或内置逻辑
-- ✅ **Agent 灵活性**: 每个 Agent 注册全部7个 Skills，根据任务自主选择
-- ✅ **SkillRegistry**: 统一管理注册、执行、格式转换
-- ✅ **统一知识库**: 医学知识统一存储在 Milvus 向量数据库，支持语义检索
-- ✅ **易于扩展**: 添加新 Skill 或新知识无需修改 Agent 代码
-
-
-## ⚙️ 配置说明
-
-项目通过根目录 `config.py` 从环境变量读取运行时配置，模板见 `.env.example`。
-
-### 配置内容
-
-```bash
-export MEDIX_LLM_API_KEY="your-llm-api-key"
-export MEDIX_LLM_MODEL="your-model"
-export MEDIX_LLM_BASE_URL="https://api.openai.com/v1"
-export MEM0_API_KEY="your-mem0-api-key"
-```
-
-可选 Redis 配置（仅在启用 Redis 持久化时需要）：
-
-```python
-# Redis config (Short-term memory persistence, optional)
-REDIS_CONFIG = {
-    "host": "localhost",
-    "port": 6379,
-    "db": 0,
-}
-```
-
-### 记忆系统配置
-
-本系统支持多层记忆机制：**SQLite 会话记忆**、**Agent 短期上下文**、**长期记忆（跨会话）**和 **Swarm 会话总结**。HTTP API 以 SQLite 为唯一会话事实源，Agent 通过 SQLite 读取历史，避免出现两套会话记录。
-
-#### 短期记忆（ShortTermMemory）
-
-**作用**：存储当前会话的对话历史，支持多轮对话上下文理解。
-
-**配置**：
-```python
-# 独立脚本/测试可使用内存存储
-from memory.short_term import ShortTermMemory
-memory = ShortTermMemory(session_id="user_123", storage_type="memory")
-
-# 方式2: Redis持久化（可选）
-memory = ShortTermMemory(session_id="user_123", storage_type="redis")
-```
-
-**使用示例**：
-```python
-# 添加消息
-memory.add_message(role="user", content="我有高血压")
-memory.add_message(role="assistant", content="高血压需要...")
-
-# 获取对话历史（最近10条）
-history = memory.get_messages(limit=10)
-
-# 会话结束时清空
-memory.clear()
-```
-
-**存储方式**：
-- **HTTP API**：SQLite `sessions/messages` 为唯一会话事实源
-- **独立脚本/测试**：可使用内存或 Redis 兼容实现
-- Agent 每次推理读取 SQLite 最近历史，API 边界负责写入 user/assistant 消息
-
-#### 长期记忆（Mem0）
-
-**作用**：跨会话记忆，通过向量相似度检索历史案例和经验。
-
-**配置**：
-```bash
-export MEM0_API_KEY="your-mem0-api-key"
-```
-
-**使用示例**：
-```python
-from memory.long_term import LongTermMemory
-memory = LongTermMemory(user_id="user_123")
-
-# 存储会话总结
-memory.add("患者有高血压，给出了生活方式建议")
-
-# 检索相关记忆
-results = memory.search("高血压患者如何管理？")
-# → 返回历史相似案例
-```
-
-**存储方式**：
-- **Mem0 云服务**：自动处理向量化和相似度搜索
-- 存储范围：跨会话持久化
-- 存储内容：会话总结
-- 无需本地部署向量数据库
-
-#### 记忆系统如何融入对话
-
-**流程**：
-
-```
-1. 会话开始
-   ↓
-2. 从 Mem0 检索相关长期记忆（历史案例）
-   ↓
-3. 初始化短期记忆（对话历史）
-   ↓
-4. Agent 执行
-   - 读取短期记忆：获取当前会话上下文
-   - 写入短期记忆：记录本轮对话
-   - 参考长期记忆：利用历史经验
-   ↓
-5. 会话结束
-   ↓
-6. 短期记忆转换为结构化数据 → 存入 Mem0 长期记忆
-   ↓
-7. 清空短期记忆
-```
-
-**多轮对话示例**：
-
-```python
-# 第1轮
-用户: "我有高血压"
-系统: [短期记忆添加用户消息]
-系统: [Agent 处理] "高血压需要注意..."
-系统: [短期记忆添加助手消息]
-
-# 第2轮
-用户: "那我应该吃什么药？"  # 追问
-系统: [读取短期记忆] → 获取上一轮"高血压"上下文
-系统: [Agent 处理] "根据您的高血压情况，建议..."  # 正确理解追问
-```
-
-**注意事项**：
-- 未设置 `MEM0_CONFIG["api_key"]` 时，系统会优雅降级，仅使用短期记忆继续工作
-- 短期记忆默认使用内存存储，无需配置 Redis
-- 长期记忆依赖 Mem0 云服务，需注册账号获取 API Key
-
-## 🏗️ Harness Engineering 融合
-
-**核心理念**："人类设计约束，AI 代理执行" —— 让 AI 在明确约束下自主工作、自我修正。
-
-### 实现的 Harness 原则
-
-| 原则 | MediX 实现 | 位置 |
-|------|-----------|------|
-| **约束驱动** | YAML 定义 Agent 能力边界，运行时验证 | `constraints/` |
-| **自动修复** | 输出违规自动添加免责声明、高危警告 | `validation/` |
-| **熵管理** | 记忆自动去重和压缩，防止系统膨胀 | `memory/entropy_manager.py` |
-
-### 核心功能
-
-**1. 约束验证**（`constraints/agent_constraints.yaml`）
-- 定义每个 Agent 允许的 Skills 和禁止的行为
-- 运行时自动验证 Skill 调用和输出内容
-- 违规时记录警告日志
-
-**2. 自动修复**（`validation/auto_fixer.py`）
-- 缺少免责声明 → 自动添加
-- 高危症状（胸痛、呼吸困难等）→ 自动添加就医提醒
-
-**3. 熵管理**（`memory/entropy_manager.py`）
-- 自动去重重复消息（基于 MD5 哈希）
-- 自动压缩历史对话（保留最近消息，压缩早期消息为摘要）
-- 熵估算和优化建议
-
-### 验证
-
-运行完整测试套件（包含 Harness 测试）：
-```bash
-python examples/test_all.py
-```
-
----
-
-## 📚 统一知识库
-
-- **向量数据库**: Milvus Lite（本地文件，无需服务器）
-- **Embedding 模型**: BAAI/bge-small-zh-v1.5（中文，512维）
-- **数据存储**: `knowledge/data/documents/` (txt 文档)
-- **初始化**: `python knowledge/scripts/import_documents.py knowledge/data/documents`
-
-## 📅 开发路线图
-
-### ✅ 阶段 1: 基础框架（已完成）
-
-- [x] 项目目录结构
-- [x] 配置管理（复用config.py）
-- [x] LLM客户端（LLM集成，支持 function calling）
-- [x] **Skill 注册系统**（SkillRegistry）
-- [x] **Agent Loop**（LLM 驱动的 Skill 调用循环）
-- [x] **3个医疗 Skills**（知识库搜索、风险评估、症状分析）
-- [x] BaseAgent（支持 Skill 注册和执行）
-- [x] ConsultationAgent（支持 Skill 调用）
-- [x] 主入口 main.py（交互式+单次查询）
-- [x] 基础示例和测试
-
-### ✅ 阶段 2: Agent Swarm 群体智能（已完成）
-
-- [x] **SharedContext**（共享环境 - 类似蚁群信息素）
-- [x] **Events**（事件驱动通信）
-- [x] **LeadAgent**（任务分解和结果汇总）
-- [x] **DiagnosticAgent**（症状诊断 Worker）
-- [x] **ResearchAgent**（文献检索 Worker）
-- [x] **AgentIdentity**（Agent 身份）
-- [x] **SessionSummary**（会话总结和经验提取）
-- [x] **SwarmCoordinator**（智能路由）
-- [x] 自主任务认领机制
-- [x] 并行执行支持
-- [x] 完全向后兼容
-
-### ✅ 阶段 3: 记忆系统增强（已完成）
-
-- [x] Agent Identity Files（IDENTITY.md）
-- [x] Session Summaries（会话总结）
-- [x] **短期记忆**（会话级对话历史，支持内存/Redis）
-- [x] **长期记忆**（Mem0云服务集成，向量相似度搜索）
-- [x] 跨会话记忆检索
-- [x] 相似案例推荐
-- [x] 优雅降级（Mem0不可用时系统继续工作）
-
-### ✅ 阶段 4: Skills 扩展（已完成）
-
-- [x] **ConsultationAgent Skills 扩展**
-  - [x] `recommend_lifestyle`: 饮食、运动、睡眠、用药的具体建议
-  - [x] 建议数据库：高血压、糖尿病、感冒、冠心病、哮喘等常见疾病
-
-- [x] **DiagnosticAgent Skills 扩展**
-  - [x] `disease_code`: ICD-10编码查询和疾病分类
-  - [x] ICD-10数据库：20+常见疾病编码和分类信息
-
-- [x] **ResearchAgent Skills 扩展**
-  - [x] `clinical_guideline`: 临床指南和专家共识检索
-  - [x] 指南数据库：10+中华医学会权威指南
-
-- [x] **测试和文档**
-  - [x] Skills 单元测试（`examples/test_all.py`）
-  - [x] 阶段 4测试套件（3个测试用例）
-
-### ✅ 阶段 5: DeepResearch（已完成）
-
-- [x] **网络搜索模块**（WebSearchTool）
-  - [x] DuckDuckGo 搜索API集成
-  - [x] 医学领域网站白名单
-  - [x] 重试机制和错误处理
-  - [x] 网页内容抓取和清洗
-
-- [x] **本地知识库**（KnowledgeBase）
-  - [x] Qdrant 向量数据库集成
-  - [x] Sentence Transformers embedding（BAAI/bge-small-zh-v1.5，统一使用中文模型）
-  - [x] 双模式支持（Qdrant / 内存存储）
-  - [x] 向量相似度检索
-
-- [x] **证据综合器**（EvidenceSynthesizer）
-  - [x] 多来源信息整合
-  - [x] LLM 驱动的证据综合
-  - [x] 结构化报告生成（关键发现、证据等级、置信度）
-  - [x] 信息冲突识别
-
-- [x] **深度研究工作流**（DeepResearchWorkflow）
-  - [x] 多步骤研究流程（查询规划 → 并行搜索 → 来源平衡 → 原文三步 KGCC → KADS → 证据综合）
-  - [x] 生成背景与检索证据显式分层，生成内容不可作为外部引用
-  - [x] LLM 驱动的查询拆解
-  - [x] 并行执行（asyncio.gather）
-  - [x] 迭代式研究支持
-
-- [x] **ResearchAgent 集成**
-  - [x] 注册 `deep_research` 工具
-  - [x] 更新 system prompt
-  - [x] 自动判断是否需要 DeepResearch
-
-- [x] **测试和文档完善**
-  - [x] 核心组件单元测试（使用模拟数据）
-  - [x] 端到端集成测试（18个测试用例全部通过）
-  - [x] 集成到统一测试套件（examples/test_all.py）
-
-### ✅ 阶段 6: 统一知识库架构（已完成）
-
-- [x] **Milvus 向量数据库集成**
-  - [x] Milvus Lite 本地部署
-  - [x] BAAI/bge-small-zh-v1.5 中文 Embedding 模型
-  - [x] 512维向量，COSINE 相似度
-
-- [x] **数据迁移**
-  - [x] 生活方式建议（5种疾病）
-  - [x] ICD-10疾病编码（20+疾病）
-  - [x] 临床指南（10+指南）
-  - [x] 多格式结构化数据导入（knowledge/scripts/import_documents.py）
-
-- [x] **Skills 重构**
-  - [x] `search_knowledge` → Milvus 语义检索
-  - [x] `recommend_lifestyle` → Milvus 检索生活方式建议
-  - [x] `disease_code` → Milvus 检索 ICD-10 编码
-  - [x] `clinical_guideline` → Milvus 检索临床指南
-
-- [x] **语义检索能力**
-  - [x] 模糊查询支持（"血压高" → "高血压"）
-  - [x] 按类型过滤（lifestyle, disease_classification, clinical_guideline）
-  - [x] 相似度评分
-
-### ✅ 阶段 7: Harness Engineering 融合（已完成）
-
-**核心理念**："人类设计约束，AI代理执行" —— 让 AI 在明确的约束下自主工作、自我修正。
-
-#### Phase 1: 约束系统（Explicit Constraint System）
-
-**目标**：将隐式的规则显式化为可验证的约束
-
-- [x] **约束定义文件**
-  - `constraints/agent_constraints.yaml`: 定义 Agent 能力边界、允许的工具、输出约束
-  - `constraints/swarm_constraints.yaml`: 定义 Swarm 协作规则、任务分解规则、Agent 选择规则
-
-- [x] **约束验证器**（`constraints/validator.py`）
-  - `validate_tool_call()`: 验证工具调用是否允许
-  - `validate_output()`: 验证输出是否符合约束（免责声明、高危警告等）
-  - `validate_task_decomposition()`: 验证任务分解是否合理
-  - `get_required_agents()`: 根据问题推荐必须包含的 Agent
-
-- [x] **自动修复器**（`validation/auto_fixer.py`）
-  - `fix_missing_disclaimer()`: 自动添加免责声明
-  - `fix_high_risk_warning()`: 自动添加高危症状警告
-  - `fix_output()`: 综合修复输出违规
-
-- [x] **非侵入式集成**
-  - 在 `core/agent_loop.py` 注入约束检查（工具调用前、输出生成后）
-  - 不修改现有 Agent 代码，保持向后兼容
-  - 优雅降级：约束模块不存在时系统继续工作
-
-## 🤝 技术架构
-
-### Agent Loop (Think-Act-Observe)
-
-```
-┌─────────┐     ┌────────┐     ┌──────────┐
-│  Think  │ ──> │  Act   │ ──> │  Observe │
-└─────────┘     └────────┘     └──────────┘
-     ↑                               │
-     └───────────────────────────────┘
-```
-
-### Skills 直达架构
-
-```
-用户问题
-   ↓
-【原子查询】→ 直接调用 Skills → Milvus/业务逻辑
-   │                ↓
-   │         OpenAI Format
-   │
-   └─【复杂问题】
-          ↓
-   SwarmCoordinator（智能路由）
-          ↓
-     LeadAgent（分解任务）
-          ↓
-    发布到 SharedContext（共享环境）
-          ↓
-    ┌─────┴─────┬────────┐
-    ↓           ↓        ↓
-ConsultAgent DiagAgent ResearchAgent
-（SkillRegistry）（直达 LLM）（并行执行）
-    │           │        │
-    └───────────┴────────┘
-          ↓
-    LeadAgent（汇总结果）
-          ↓
-   SessionSummary（学习）
-```
-
-**核心原理**：
-- ✅ Skills → OpenAI Format
-- ✅ SkillRegistry 统一管理（注册、执行、转换）
-- ✅ Agent 注册所有 Skills，根据任务自主选择
-- ✅ Agent 通过"信息素"（SharedContext）间接通信
-- ✅ 去中心化协作，整体能力涌现
-
-### Agent Swarm 群体智能
-
-**关键特性**：去中心化、自组织、涌现智能
-
-**工作流程**：
-1. 简单问题 → 单 Agent（快速响应）
-2. 复杂问题 → LeadAgent 分解任务
-3. Worker Agents 自主认领（基于能力匹配）
-4. 并行执行（每个 Agent 自主选择 Skills）
-5. LeadAgent 汇总结果
-6. SessionSummary 学习总结
-
-### 记忆系统架构
-
-```
-┌────────────────────────────────────┐
-│  短期记忆（会话级，内存/Redis）     │
-│  - 对话历史（messages）            │
-│  - 当前会话上下文                  │
-│  - 保留时间：60分钟                │
-│  存储：内存（默认）或 Redis        │
-└────────────────────────────────────┘
-           ↕ (会话结束时)
-┌────────────────────────────────────┐
-│  长期记忆（跨会话，Mem0云服务）    │
-│  - 会话总结                        │
-│  存储：Mem0 API + 向量数据库       │
-└────────────────────────────────────┘
-```
-
-## ⚠️ 免责声明
-
-本系统仅供学习和研究使用，不能替代专业医生的诊断和治疗。所有医疗建议仅供参考，如有健康问题请及时就医。
-
-## 📄 许可证
-
-MIT License
-
-## 🙏 致谢
-
-- 基于 [MediX-R1](https://github.com/...) 医学多模态模型
-- 使用 [LLM API](https://www.volcengine.com/) 作为LLM后端
-- 记忆管理基于 [Mem0](https://mem0.ai/)
-
----
+├── agents/                 # 三个专业 Agent
+├── core/                   # LLMClient、AgentLoop、SkillRegistry
+├── swarm/                  # LeadAgent、Coordinator、SharedContext、事件
+├── research/               # 查询路由、Web 搜索、DeepResearch、证据综合
+├── knowledge/              # 解析器、切分、Milvus、批量导入
+├── memory/                 # SQLite 短期记忆、Mem0、会话总结、熵管理
+├── constraints/            # YAML 约束与运行时验证
+├── validation/             # 输出自动修复
+├── backend/                # FastAPI 路由和 SQLiteStore
+├── frontend/               # Vue 3 工作台
+├── tests/                  # API、切分、RAG、可信问答测试
+├── examples/test_all.py    # 综合示例测试
+├── scripts/start.sh        # Compose 启动入口
+├── Dockerfile              # 前端构建和 Python 运行时镜像
+└── .env.example            # 配置模板
+~~~
+
+## 配置说明
+
+复制 .env.example 为 .env，密钥不要提交。
+
+| 配置项 | 必需 | 默认值 | 说明 |
+|---|---|---|---|
+| MEDIX_LLM_API_KEY | 是 | 空 | LLM 接口密钥 |
+| MEDIX_LLM_MODEL | 否 | qwen3.8-max | 模型名称 |
+| MEDIX_LLM_BASE_URL | 否 | 项目默认兼容接口 | API 根地址 |
+| MEDIX_LLM_TEMPERATURE | 否 | 0.7 | 生成温度 |
+| MEDIX_LLM_MAX_TOKENS | 否 | 8192 | 生成上限 |
+| MEM0_API_KEY | 否 | 空 | 长期记忆，未设置时降级 |
+| MEDIX_DB_PATH | 否 | data/medix.db | SQLite 路径 |
+| MEDIX_MILVUS_DB_PATH | 否 | knowledge/data/milvus_lite.db | Milvus Lite 路径 |
+| MEDIX_EMBEDDING_MODEL | 否 | BAAI/bge-small-zh-v1.5 | Embedding 模型 |
+| MEDIX_EMBEDDING_BATCH_SIZE | 否 | 16 | 向量化批大小 |
+| MEDIX_PARSE_CONCURRENCY | 否 | 2 | 解析并发上限 |
+| MEDIX_CHUNK_MAX_TOKENS | 否 | 384 | chunk token 上限 |
+| MEDIX_CHUNK_OVERLAP_TOKENS | 否 | 48 | 语义单元重叠上限 |
+| MEDIX_KB_SOURCE_TYPES | 否 | 多种医学语料 | 分源检索类型 |
+| MEDIX_RETRIEVAL_PER_SOURCE | 否 | 3 | 每类来源候选配额 |
+
+## 性能与安全边界
+
+- 首次启动需要加载 Embedding 模型；单例和模型缓存避免重复加载。
+- 解析并发受 MEDIX_PARSE_CONCURRENCY 限制，Milvus Lite 写入使用进程内锁。
+- 当前 SQLite 和后台任务适合单机 MVP；生产多实例应引入共享数据库、任务队列、鉴权和对象存储。
+- 急症路由、免责声明、引用校验和证据不足拒答构成医学安全门禁。
+- 会话通过 session_id、用户记忆通过 user_id 隔离；上传文件使用随机文件名并限制下载目录。
+- 当前 API 尚未提供完整登录认证、细粒度权限、审计日志和多租户隔离；生产环境必须收紧 CORS。
+- 系统不应被用于独立诊断、处方或替代急救服务。
+
+## 项目亮点
+
+1. **证据门禁而非单纯 RAG**：来源平衡、KGCC/KADS、引用校验和失败拒答形成闭环。
+2. **逻辑主题切分**：标题路径、表格字段语义和 token 上限保护医学上下文完整性。
+3. **路由与协作分离**：Coordinator 选路径，LeadAgent 分任务，Worker 通过 SharedContext 协作。
+4. **记忆事实源统一**：HTTP、CLI 和 Agent Loop 复用 SQLite，Mem0 只承担可选语义记忆。
+5. **Harness Engineering 落地**：约束、自动修复、熵管理和失败状态进入运行时。
+6. **可审计知识库流水线**：SHA256 去重、版本、解析任务、chunks 和索引状态均可追踪。
+
+## Roadmap
+
+- [x] FastAPI + Vue 3 工作台
+- [x] SQLite 统一会话、用户记忆、文档和任务登记
+- [x] 多格式导入、逻辑主题切分和 Milvus Lite 检索
+- [x] 证据优先问答、引用校验和急症分流
+- [x] Agent Loop、Skills-Agent 和 Agent Swarm
+- [ ] 完整认证、角色权限与多租户隔离
+- [ ] 共享任务队列和多实例部署
+- [ ] 记忆提取、冲突处理、过期清理和管理 UI 完整化
+- [ ] Agent checkpoint、断点恢复和评测基准
+
+## 贡献指南
+
+~~~bash
+git checkout -b feature/your-feature
+python -m pytest -q
+git commit
+git push origin feature/your-feature
+~~~
+
+请不要提交 .env、模型缓存和本地数据库临时文件；新增功能应补充 API、切分、检索和失败路径测试。
+
+## FAQ
+
+### 没有 LLM API Key 能运行吗？
+
+可以运行部分离线测试和查看前端，但真正的 Agent 问答需要 MEDIX_LLM_API_KEY。未配置 Mem0 时，系统仍使用 SQLite 会话记忆。
+
+### 为什么首次启动很慢？
+
+首次运行需要下载 BGE 中文 Embedding 模型并创建 Milvus Lite collection；Compose 会持久化模型缓存。
+
+### 批量导入和 API 上传有什么区别？
+
+批量脚本和 API 复用同一套 SQLite 文档登记、SHA256 去重、版本、解析、chunk 和 Milvus 索引机制；API 通过 parse/index 接口显式推进任务。
+
+### 可以替换模型吗？
+
+可以。修改 MEDIX_LLM_BASE_URL、MEDIX_LLM_MODEL 和 MEDIX_LLM_API_KEY 即可，但工具调用兼容性需自行验证。
+
+## License
+
+当前仓库未包含 LICENSE 文件，公开发布前请补充明确的开源许可证和第三方依赖声明。

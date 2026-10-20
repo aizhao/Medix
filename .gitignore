@@ -1,5 +1,7 @@
 # 环境变量
 .env
+.env.*
+!.env.example
 
 # Python
 __pycache__/
@@ -13,6 +15,11 @@ dist/
 downloads/
 data/uploads/minibench-*/
 data/eval_corpus/
+data/uploads/
+*.db
+*.sqlite
+*.sqlite3
+knowledge/data/milvus_lite.db/
 eggs/
 .eggs/
 lib/
@@ -39,6 +46,10 @@ frontend/dist/
 *.swp
 *.swo
 *~
+.DS_Store
+
+# 浏览器自动化临时文件
+.playwright-cli/
 
 # 日志
 *.log
@@ -47,6 +58,9 @@ frontend/dist/
 .pytest_cache/
 .coverage
 htmlcov/
+.mypy_cache/
+.ruff_cache/
+.pyright/
 
 # 记忆数据
 /tmp/qdrant/
