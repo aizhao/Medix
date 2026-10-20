@@ -13,6 +13,7 @@ from research.web_search import WebSearchTool, SearchResult
 from knowledge.milvus_kb import MedicalKnowledgeBase
 from research.evidence_synthesizer import EvidenceSynthesizer, ResearchReport
 from research.medrgag import (
+    EvidenceDocument,
     MedRGAGPipeline,
     evidence_from_kb,
     evidence_from_web,
@@ -78,7 +79,8 @@ class DeepResearchWorkflow:
         self.per_source_quota = max(1, int(os.getenv("MEDIX_RETRIEVAL_PER_SOURCE", "3")))
 
         # 初始化组件
-        self.web_search = WebSearchTool() if use_web_search else None
+        web_timeout = max(2, int(os.getenv("MEDIX_WEB_SEARCH_TIMEOUT", "8")))
+        self.web_search = WebSearchTool(timeout=web_timeout) if use_web_search else None
         # 使用 Milvus 知识库单例（和其他 Skills 共享，避免重复加载模型）
         self.knowledge_base = get_knowledge_base() if use_knowledge_base else None
         self.synthesizer = EvidenceSynthesizer(llm_client=self.llm_client)
@@ -88,7 +90,9 @@ class DeepResearchWorkflow:
         self,
         question: str,
         max_web_results: int = 10,
-        max_kb_results: int = 5
+        max_kb_results: int = 5,
+        context: Optional[Dict[str, Any]] = None,
+        agent_findings: Optional[List[Dict[str, Any]]] = None,
     ) -> ResearchReport:
         """
         执行深度研究
@@ -101,7 +105,10 @@ class DeepResearchWorkflow:
         Returns:
             研究报告
         """
-        logger.info(f"Starting DeepResearch for: {question}")
+        logger.info(
+            f"Starting DeepResearch for: {question} "
+            f"(agent_findings={len(agent_findings or [])})"
+        )
 
         # Step 1: 查询规划
         sub_queries = await self._plan_queries(question)
@@ -114,6 +121,21 @@ class DeepResearchWorkflow:
         search_tasks = []
         task_kinds = []
         ranked_lists = []
+        agent_evidence = self._agent_findings_to_evidence(agent_findings or [])
+        agent_has_external = any(
+            bool(item.url_or_path)
+            or bool(item.metadata.get("source_url"))
+            or bool(item.metadata.get("document_record_id"))
+            or bool(item.metadata.get("chunk_id"))
+            for item in agent_evidence
+        )
+        # 本地 Milvus 文档 ID 不能代表网络搜索已成功；只有 URL/来源 URL
+        # 存在时，才允许跳过网络检索，避免把 Agent 摘要误判成外部证据。
+        agent_has_web = any(
+            str(item.url_or_path).lower().startswith(("http://", "https://"))
+            or str(item.metadata.get("source_url", "")).lower().startswith(("http://", "https://"))
+            for item in agent_evidence
+        )
         source_status = {
             **({"web": "pending"} if self.use_web_search else {}),
             **({source: "pending" for source in self.kb_source_types} if self.use_knowledge_base else {}),
@@ -125,7 +147,24 @@ class DeepResearchWorkflow:
                 planned_queries.append(normalized)
         planned_queries = planned_queries[:3]
 
-        if self.use_web_search and self.web_search:
+        # ResearchAgent 可能已经调用 deep_research。此时复用其结构化
+        # tool_results，避免 MedRGAG 再次完整执行网络研究；若没有可引用
+        # 的 Agent 证据，则保留本地知识库作为安全兜底。
+        if agent_evidence:
+            ranked_lists.append(agent_evidence)
+            source_status["agent_findings"] = "available"
+
+        run_web = self.use_web_search and self.web_search and not agent_has_web
+        run_kb = self.use_knowledge_base and self.knowledge_base and not agent_has_external
+        logger.info(
+            "Retrieval plan: agent_evidence={}, agent_has_web={}, run_web={}, run_kb={}",
+            len(agent_evidence),
+            agent_has_web,
+            bool(run_web),
+            bool(run_kb),
+        )
+
+        if run_web:
             # 网络搜索
             for query in planned_queries:
                 task_kinds.append("web")
@@ -136,7 +175,7 @@ class DeepResearchWorkflow:
                     )
                 )
 
-        if self.use_knowledge_base and self.knowledge_base:
+        if run_kb:
             # 从 Milvus 知识库检索
             for query in planned_queries:
                 task_kinds.append("kb_sources")
@@ -212,6 +251,74 @@ class DeepResearchWorkflow:
 
         logger.info("DeepResearch completed")
         return report
+
+    @staticmethod
+    def _agent_findings_to_evidence(
+        agent_findings: List[Dict[str, Any]],
+    ) -> List[EvidenceDocument]:
+        """Convert completed Worker tool outputs into MedRGAG candidates."""
+        documents: List[EvidenceDocument] = []
+        for finding_index, finding in enumerate(agent_findings):
+            if not isinstance(finding, dict):
+                continue
+            tool_results = finding.get("tool_results") or []
+            if not isinstance(tool_results, list):
+                continue
+            for result_index, item in enumerate(tool_results):
+                if not isinstance(item, dict):
+                    continue
+                tool = str(item.get("tool", "agent_finding"))
+                payload = item.get("result")
+                if not isinstance(payload, dict):
+                    payload = {"answer": str(payload)}
+
+                sources = payload.get("citations") or payload.get("sources") or []
+                if isinstance(sources, list):
+                    for source_index, source in enumerate(sources):
+                        if not isinstance(source, dict):
+                            continue
+                        text = str(
+                            source.get("excerpt")
+                            or source.get("content")
+                            or source.get("snippet")
+                            or source.get("text")
+                            or ""
+                        ).strip()
+                        if not text:
+                            continue
+                        source_type = str(source.get("type") or source.get("source_kind") or tool)
+                        url = str(source.get("url") or source.get("source_url") or "")
+                        metadata = dict(source.get("metadata") or {})
+                        for key in ("document_record_id", "chunk_id", "page", "filename", "source", "publisher", "published_at", "version"):
+                            if key in source:
+                                metadata[key] = source[key]
+                        documents.append(EvidenceDocument(
+                            id=str(source.get("id") or f"agent-{finding_index}-{result_index}-{source_index}"),
+                            text=text,
+                            title=str(source.get("title") or tool),
+                            source_kind=source_type,
+                            url_or_path=url,
+                            authority=float(source.get("authority", 0.7) or 0.7),
+                            retrieval_score=float(source.get("score", source.get("retrieval_score", 0.5)) or 0.5),
+                            status=str(source.get("status", "retrieved")),
+                            metadata=metadata,
+                        ))
+
+                answer = str(payload.get("answer") or "").strip()
+                if answer and not sources:
+                    # Agent 自己生成的总结不是外部引用，只作为候选上下文；
+                    # 其 citation_allowed 状态由 snippet_only 明确标记。
+                    documents.append(EvidenceDocument(
+                        id=f"agent-summary-{finding_index}-{result_index}",
+                        text=answer[:5000],
+                        title=f"{tool} Agent 摘要",
+                        source_kind="agent_finding",
+                        authority=0.25,
+                        retrieval_score=0.35,
+                        status="snippet_only",
+                        metadata={"agent_tool": tool, "citation_allowed": False},
+                    ))
+        return documents
 
     async def _search_milvus(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
         """

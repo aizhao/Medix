@@ -11,6 +11,8 @@ agents:
     # 允许的工具（当前所有 Agent 都注册了全部工具，这里定义推荐使用的工具）
     allowed_tools:
       - search_knowledge
+      - clinical_guideline
+      - deep_research
       - recommend_lifestyle
       - assess_risk
       - search_history

@@ -8,6 +8,7 @@ LeadAgent：任务分解和结果汇总
 - Worker 自主认领任务并执行
 """
 import uuid
+import re
 from typing import Dict, Any, List, Optional
 from loguru import logger
 
@@ -35,6 +36,14 @@ class LeadAgent:
     def __init__(self, llm_client: Optional[LLMClient] = None):
         self.agent_id = "lead_agent"
         self.llm_client = llm_client or LLMClient()
+
+    @staticmethod
+    def _normalize_final_answer(answer: str) -> str:
+        """Keep user-facing Markdown compact; internal evidence stays in metadata."""
+        text = str(answer or "").replace("\r\n", "\n").replace("\r", "\n")
+        text = re.sub(r"[ \t]+\n", "\n", text)
+        text = re.sub(r"\n[ \t]*\n(?:[ \t]*\n)+", "\n\n", text)
+        return text.strip()
 
     def _get_system_prompt(self) -> str:
         """获取系统提示词"""
@@ -310,7 +319,8 @@ class LeadAgent:
         self,
         question: str,
         shared_context: SharedContext,
-        timeout_occurred: bool = False
+        timeout_occurred: bool = False,
+        evidence: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
         汇总所有 Agent 的贡献，生成最终答案
@@ -364,12 +374,26 @@ class LeadAgent:
 **注意**：由于系统响应超时，以下分析模块未能完成：{', '.join(incomplete_tasks)}
 以下是基于已完成的 {len(completed_agents)} 个 Agent 的部分分析结果。"""
 
+        evidence_text = ""
+        if evidence:
+            evidence_text = f"""
+
+**MedRGAG 证据阶段结果**：
+{evidence.get('answer', '')}
+
+**可引用来源**：
+{evidence.get('citations', [])}
+
+**证据追踪**：
+{evidence.get('evidence_trace', {})}
+"""
+
         synthesis_prompt = f"""你是医疗 Swarm 的 Lead Agent，负责汇总多个专业 Agent 的分析结果。
 
 **用户问题**：{question}
 
 **Agent 贡献**：
-{chr(10).join(contributions_text)}{timeout_note}
+{chr(10).join(contributions_text)}{timeout_note}{evidence_text}
 
 **任务**：
 整合以上所有分析，生成一个全面、专业的最终答案。
@@ -378,10 +402,13 @@ class LeadAgent:
 1. 综合所有 Agent 的观点
 2. 突出多角度分析的优势
 3. 保持医疗建议的严谨性
-4. 包含【风险评估】【诊断分析】【医学证据】等模块（如果相关 Agent 提供了）
+4. 包含【风险评估】【诊断分析】【医学证据】等模块（如果相关 Agent 或 MedRGAG 提供了）
 5. 给出【核心建议】
 6. 添加【免责声明】
-{"7. 如果有分析模块未完成，在答案中明确说明" if timeout_occurred else ""}
+7. 只输出面向用户的正式回答，不要提及 MedRGAG、Evidence Gate、内部核验过程、检索过程、证据追踪或“根据核验结果”。
+8. 不要罗列“未提供”“未检索到”“不予陈述”等内部缺口；只表达当前证据能够支持的结论。
+9. 不要在正文中输出 `kb-*`、`web-*` 等内部来源 ID，来源会在独立证据栏展示。
+{f"如有分析模块未完成，请简要说明。" if timeout_occurred else ""}
 
 **输出格式**：
 【风险评估】 (如果有)
@@ -406,8 +433,51 @@ class LeadAgent:
                 {"role": "user", "content": synthesis_prompt}
             ])
 
-            return response
+            return self._normalize_final_answer(response)
 
         except Exception as e:
             logger.error(f"Synthesis error: {e}")
             return f"汇总结果时出错：{e}"
+
+    async def synthesize_single_result(
+        self,
+        question: str,
+        agent_result: Dict[str, Any],
+        evidence: Dict[str, Any],
+    ) -> str:
+        """Use MedRGAG evidence to generate the final answer for single-Agent mode."""
+        prompt = f"""你是医疗系统的最终回答生成器。
+
+用户问题：{question}
+
+Worker 初步分析（仅作为待核验草稿）：
+{agent_result.get('answer', '')}
+
+MedRGAG 核验结果（优先依据）：
+{evidence.get('answer', '')}
+
+可引用来源：
+{evidence.get('citations', [])}
+
+证据追踪：
+{evidence.get('evidence_trace', {})}
+
+要求：
+1. 只保留能够被 MedRGAG 证据支持的医学事实；
+2. 不得把 Worker 草稿中的无来源内容当成事实；
+3. 明确区分证据结论、一般性解释和不确定性；
+4. 包含核心建议和医疗免责声明；
+5. 不输出具体个体化处方，不替代医生诊疗。
+6. 只输出面向用户的正式回答，不要提及 MedRGAG、Evidence Gate、内部核验过程、检索过程或“根据核验结果”。
+7. 不要罗列“未提供”“未检索到”“不予陈述”等内部证据缺口；只保留证据支持的自然语言结论。
+8. 不要在正文中输出 `kb-*`、`web-*` 等内部来源 ID，来源会在独立证据栏展示。
+"""
+        try:
+            response = await self.llm_client.chat([{"role": "user", "content": prompt}])
+            return self._normalize_final_answer(response)
+        except Exception as exc:
+            logger.error(f"Single-result synthesis error: {exc}")
+            # 生成失败时保留已通过门禁的证据回答，而不是返回未核验草稿。
+            return self._normalize_final_answer(
+                evidence.get("answer") or agent_result.get("answer", "")
+            )

@@ -141,6 +141,9 @@ function renderMarkdown(value) {
   html = html.replace(/^[-*] (.+)$/gm, '<li>$1</li>')
   html = html.replace(/(<li>.*<\/li>)/gs, '<ul>$1</ul>')
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/`([^`]+)`/g, '<code>$1</code>')
+  // Keep streamed and historical answers compact even when an upstream model
+  // emits several empty lines between paragraphs.
+  html = html.replace(/\n{3,}/g, '\n\n')
   return html.replace(/\n/g, '<br>')
 }
 

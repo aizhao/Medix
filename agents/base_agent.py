@@ -87,7 +87,11 @@ class BaseAgent(ABC):
         """
         # 默认实现
         if 'question' in input_data:
-            return input_data['question']
+            question = input_data['question']
+            context = input_data.get('context') or {}
+            if context:
+                return f"背景上下文：\n{context}\n\n子任务：{question}"
+            return question
         elif 'query' in input_data:
             return input_data['query']
         else:
@@ -144,7 +148,11 @@ class BaseAgent(ABC):
         """附加 AgentIdentityManager（由 Swarm 调用）"""
         self.identity_manager = identity_manager
 
-    async def process_subtask(self, subtask: Any) -> Dict[str, Any]:
+    async def process_subtask(
+        self,
+        subtask: Any,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """
         处理子任务（Swarm 模式）
 
@@ -155,7 +163,8 @@ class BaseAgent(ABC):
         input_data = {
             'question': subtask.description,
             'subtask_id': subtask.id,
-            'subtask_type': subtask.type
+            'subtask_type': subtask.type,
+            'context': context or {},
         }
 
         return await self.run_loop(input_data)

@@ -186,7 +186,7 @@ Evidence：
 
 
 class EvidenceFirstMedicalWorkflow:
-    """Run retrieval → KGCC → KADS → synthesis → evidence gate as the main path."""
+    """Backward-compatible MedRGAG evidence stage used by the unified graph."""
 
     def __init__(
         self,
@@ -197,31 +197,41 @@ class EvidenceFirstMedicalWorkflow:
         self.research_workflow = research_workflow or DeepResearchWorkflow(llm_client=self.llm_client)
         self.gate = EvidenceGate(self.llm_client)
 
-    async def run(self, question: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        report = await self.research_workflow.run(question)
+    async def run(
+        self,
+        question: str,
+        context: Optional[Dict[str, Any]] = None,
+        agent_findings: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        # Agent findings are carried into the evidence trace and final synthesis
+        # context; retrieved sources remain the only citation-authorized inputs.
+        try:
+            report = await self.research_workflow.run(
+                question,
+                context=context,
+                agent_findings=agent_findings or [],
+            )
+        except TypeError:
+            # Keep lightweight test doubles and legacy research workflows
+            # compatible while the unified stage is being adopted.
+            report = await self.research_workflow.run(question)
         decision = await self.gate.evaluate(question, report)
         trace = dict(report.evidence_trace or {})
         trace["evidence_gate"] = decision.to_dict()
-        trace["pipeline"] = "evidence_first_medrgag"
+        trace["pipeline"] = "medrgag_evidence_stage"
+        trace["agent_findings_count"] = len(agent_findings or [])
 
         if decision.status == "refused":
-            reason = "；".join(decision.reasons) or "当前证据不足"
             answer = (
-                "## 当前无法给出可靠的医学结论\n\n"
-                f"系统没有找到足以支持答案的可核验外部证据（{reason}）。"
-                "为避免把模型生成内容误当成医学事实，本次不提供推测性结论。\n\n"
-                "如果症状持续、加重，或涉及用药、孕产妇、儿童及诊断治疗决策，请咨询医生或药师。"
+                "## 暂无法提供可靠建议\n\n"
+                "目前可用的医学资料不足以支持明确结论，因此不作未经证实的推断。\n\n"
+                "如症状持续或加重，或涉及用药、孕产妇、儿童及诊断治疗决策，请咨询医生或药师。"
             )
         else:
             findings = "\n".join(f"- {item}" for item in decision.supported_findings)
-            state_label = "已通过证据门控" if decision.status == "passed" else "部分证据通过，已降级输出"
             answer = (
-                f"## 基于证据的回答\n\n{findings}\n\n"
-                f"## 证据状态\n\n{state_label}。"
+                f"## 相关建议\n\n{findings}"
             )
-            if report.unresolved_knowledge:
-                gaps = "、".join(report.unresolved_knowledge[:3])
-                answer += f"仍需进一步核实的知识点：{gaps}。"
 
         warnings = []
         if decision.status != "passed":

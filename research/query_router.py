@@ -1,4 +1,4 @@
-"""Deterministic routing for the evidence-first medical workflow."""
+"""Deterministic safety/evidence policy for the unified agent workflow."""
 from __future__ import annotations
 
 import re
@@ -45,10 +45,11 @@ _HIGH_RISK = re.compile(
 
 
 def classify_query(question: str, context: Optional[Dict[str, Any]] = None) -> QueryRoute:
-    """Route substantive medical requests through evidence retrieval by default.
+    """Return policy metadata; the coordinator keeps one execution graph.
 
-    Only obvious small talk and product operations bypass MedRGAG. This avoids
-    relying on an LLM's optional tool call for factual medical answers.
+    Only urgent requests bypass the Agent/MedRGAG graph.  The
+    ``medical_evidence`` value is a policy flag consumed after Worker agents
+    contribute, not a separate top-level execution route.
     """
     text = " ".join(str(question or "").strip().split())
     if _URGENT_SIGNS.search(text):

@@ -3,6 +3,12 @@ services:
     build: .
     ports:
       - "8000:8000"
+    # 部署环境的默认 DNS 无法解析外部搜索站点时，显式使用可用 DNS。
+    # 可通过 MEDIX_DNS_PRIMARY / MEDIX_DNS_SECONDARY 覆盖。
+    dns:
+      - ${MEDIX_DNS_PRIMARY:-223.5.5.5}
+      - ${MEDIX_DNS_SECONDARY:-119.29.29.29}
+      - ${MEDIX_DNS_FALLBACK:-1.1.1.1}
     env_file:
       - path: .env
         required: false
@@ -17,6 +23,9 @@ services:
       MEDIX_CHUNK_OVERLAP_TOKENS: ${MEDIX_CHUNK_OVERLAP_TOKENS:-48}
       MEDIX_KB_SOURCE_TYPES: ${MEDIX_KB_SOURCE_TYPES:-clinical_guideline,drug_label,textbook,research,standard,document,unclassified}
       MEDIX_RETRIEVAL_PER_SOURCE: ${MEDIX_RETRIEVAL_PER_SOURCE:-3}
+      MEDIX_WORKER_TIMEOUT: ${MEDIX_WORKER_TIMEOUT:-180}
+      MEDIX_MEDRGAG_TIMEOUT: ${MEDIX_MEDRGAG_TIMEOUT:-120}
+      MEDIX_WEB_SEARCH_TIMEOUT: ${MEDIX_WEB_SEARCH_TIMEOUT:-8}
       HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
       HF_HOME: /root/.cache/huggingface
       HF_HUB_DOWNLOAD_TIMEOUT: ${HF_HUB_DOWNLOAD_TIMEOUT:-120}
@@ -27,6 +36,10 @@ services:
       MEDIX_LLM_TEMPERATURE: ${MEDIX_LLM_TEMPERATURE:-0.7}
       MEDIX_LLM_MAX_TOKENS: ${MEDIX_LLM_MAX_TOKENS:-8192}
       MEM0_API_KEY: ${MEM0_API_KEY:-}
+      # 如果云主机必须经由代理访问外网，在 .env 中配置即可；为空时不注入代理。
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      ALL_PROXY: ${ALL_PROXY:-}
     volumes:
       - medix_data:/app/data
       - medix_milvus:/app/knowledge/data

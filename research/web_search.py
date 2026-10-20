@@ -9,6 +9,7 @@ from loguru import logger
 import asyncio
 from bs4 import BeautifulSoup
 import httpx
+from urllib.parse import quote_plus
 
 # 尝试导入 ddgs (新包名) 或 duckduckgo_search (旧包名)
 try:
@@ -42,7 +43,7 @@ class WebSearchTool:
     - 结果去重和质量过滤
     """
 
-    def __init__(self, timeout: int = 30):
+    def __init__(self, timeout: int = 8):
         """
         初始化搜索工具
 
@@ -88,7 +89,7 @@ class WebSearchTool:
         region: str = "cn-zh",  # 中国区域，更适合中文搜索
         safesearch: str = "on",  # 严格安全搜索
         timelimit: Optional[str] = None,  # 时间限制：'d'(天), 'w'(周), 'm'(月), 'y'(年)
-        retry_count: int = 2  # 重试次数
+        retry_count: int = 0  # 外部搜索失败时快速降级到本地知识库
     ) -> List[SearchResult]:
         """
         执行搜索（参考 shanglv 项目的实现）
@@ -105,8 +106,7 @@ class WebSearchTool:
             搜索结果列表
         """
         if not DDGS_AVAILABLE:
-            logger.error("DDGS not available, cannot perform web search")
-            return []
+            logger.warning("DDGS not available; using HTML search fallbacks")
 
         for attempt in range(retry_count + 1):
             try:
@@ -120,23 +120,47 @@ class WebSearchTool:
                 search_results = []
 
                 # 尝试多个后端：bing → duckduckgo → auto
-                for backend in ("bing", "duckduckgo", "auto"):
-                    try:
-                        ddgs = self._new_ddgs()
-                        raw = ddgs.text(
-                            enhanced_query,
-                            max_results=max_results * 2,  # 获取更多结果用于过滤
-                            safesearch=safesearch,
-                            region=region,
-                            backend=backend  # 关键：指定后端
-                        )
-                        search_results = list(raw)
-                        if search_results:
-                            logger.debug(f"DDGS backend {backend} succeeded with {len(search_results)} results")
-                            break
-                    except Exception as e:
-                        logger.debug(f"DDGS backend {backend} failed: {e}")
-                        continue
+                if DDGS_AVAILABLE:
+                    for backend in ("bing", "duckduckgo", "auto"):
+                        try:
+                            ddgs = self._new_ddgs()
+                            raw = await asyncio.wait_for(
+                                asyncio.to_thread(
+                                    ddgs.text,
+                                    enhanced_query,
+                                    max_results=max_results * 2,
+                                    safesearch=safesearch,
+                                    region=region,
+                                    backend=backend,
+                                ),
+                                timeout=self.timeout,
+                            )
+                            search_results = list(raw)
+                            if search_results:
+                                logger.debug(f"DDGS backend {backend} succeeded with {len(search_results)} results")
+                                break
+                        except Exception as e:
+                            logger.debug(f"DDGS backend {backend} failed: {e}")
+                            continue
+
+                # DDGS 在部分云主机上会被搜索站点限流或阻断；使用普通
+                # HTML 搜索作为兜底，避免把搜索能力绑定到单一 SDK。
+                if not search_results:
+                    for provider in (self._search_baidu_html, self._search_bing_html):
+                        try:
+                            search_results = await asyncio.wait_for(
+                                provider(enhanced_query, max_results * 2),
+                                timeout=self.timeout,
+                            )
+                            if search_results:
+                                logger.info(
+                                    "HTML search fallback succeeded: {} ({})",
+                                    provider.__name__,
+                                    len(search_results),
+                                )
+                                break
+                        except Exception as exc:
+                            logger.debug("HTML search fallback failed: {}", exc)
 
                 # 处理搜索结果
                 for result in search_results:
@@ -168,6 +192,61 @@ class WebSearchTool:
                     return []
 
         return []
+
+    async def _search_baidu_html(
+        self, query: str, max_results: int
+    ) -> List[Dict[str, str]]:
+        """Use Baidu's public result page when DDGS backends are unavailable."""
+        url = f"https://www.baidu.com/s?wd={quote_plus(query)}"
+        async with httpx.AsyncClient(
+            timeout=self.timeout,
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; MedixEvidenceBot/0.2)"},
+        ) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        results: List[Dict[str, str]] = []
+        for heading in soup.select("h3"):
+            anchor = heading.find("a", href=True)
+            if not anchor:
+                continue
+            title = anchor.get_text(" ", strip=True)
+            href = str(anchor.get("href", ""))
+            container = heading.parent
+            snippet = container.get_text(" ", strip=True) if container else title
+            results.append({"title": title, "href": href, "body": snippet})
+            if len(results) >= max_results:
+                break
+        return results
+
+    async def _search_bing_html(
+        self, query: str, max_results: int
+    ) -> List[Dict[str, str]]:
+        """Use Bing's HTML page as a second provider-independent fallback."""
+        url = f"https://cn.bing.com/search?q={quote_plus(query)}&setlang=zh-CN"
+        async with httpx.AsyncClient(
+            timeout=self.timeout,
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; MedixEvidenceBot/0.2)"},
+        ) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        results: List[Dict[str, str]] = []
+        for item in soup.select("li.b_algo"):
+            anchor = item.select_one("h2 a[href]")
+            if not anchor:
+                continue
+            snippet_node = item.select_one(".b_caption p")
+            results.append({
+                "title": anchor.get_text(" ", strip=True),
+                "href": str(anchor.get("href", "")),
+                "body": snippet_node.get_text(" ", strip=True) if snippet_node else "",
+            })
+            if len(results) >= max_results:
+                break
+        return results
 
     def filter_by_domain(
         self,

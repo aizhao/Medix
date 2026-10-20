@@ -1,0 +1,46 @@
+教育背景
+2025.09–2028.06 ⻄南⽯油⼤学（双⼀流） 计算机技术｜硕⼠
+2021.09–2025.06 四川轻化⼯⼤学 电⼦商务｜本科
+实习经历
+2026.04–2026.08 北京睿⽴⽅医信科技有限公司成都分公司 Agent 开发实习⽣
+医学知识库构建：负责多源异构医学⽂档解析采集、语义切⽚、知识标注与元数据抽取、向量化检索及 Hybrid Recall / Rerank；设计医
+院、科室、⻆⾊与⽂档密级的权限隔离机制，⽀撑合规的医学问答与 Agent 检索增强。
+医院感染分析⼯作流：串联病例信息抽取、指南检索、规则判断、L L M 推理与建议⽣成，辅助输出感染诊断依据、鉴别要点和防控建议，
+提升院感分析过程的可追溯性。
+项⽬经历
+MediX：证据优先的多智能体医学问答系统 Agent / RAG / 可信问答
+技术栈：Python、O penAI Function Calling、Agent L oop、Skills-Agent、Agent Swarm、MedRGAG、Milvus L ite、SQL ite、Mem0、
+FastAPI、SSE
+Skills-Agent 与多 Agent 编排：基于⾃研 Agent L oop 将 Skill ⾃动转换为 O penAI Tools；由 L eadAgent 拆解任务，Consultation、
+Diagnostic、Research 三类 W orker 按复杂度切换单 Agent / 并⾏ Swarm，并通过共享上下⽂汇总结果。
+可扩展 Skill 体系：通过⽬录扫描、函数签名推断和统⼀注册机制⾃动发现 9 个医学 Skill，覆盖知识检索、临床指南、深度研究、症状分
+析、⻛险评估、ICD-10、⽣活⽅式及会话记忆，降低 Agent 与能⼒模块的耦合。
+统⼀ Agent + M edRGAG 执⾏图：将 W orker 分析接⼊强制证据阶段，完成本地/⽹络分源检索、RRF 融合、KGCC 知识补全、KADS 证
+据选择与 Evidence Gate 核验；医学事实问题不再依赖 Agent 是否主动调⽤检索⼯具。
+引⽤⻔禁与安全降级：分离“推理上下⽂”和“可引⽤来源”，禁⽌⽣成背景伪装外部证据；对引⽤ ID、claim-evidence ⽀持关系及⾼⻛险
+权威来源逐项校验，证据不⾜、超时或来源不可⽤时拒答或结构化降级。
+M emory 与 Harness：以 SQL ite 统⼀ API 与 Agent 会话事实源，结合按 user_id 隔离的 Mem0 ⻓期记忆与 Memory CRU D；使⽤
+YAML  约束、急症确定性路由、⼯具/输出校验和⾃动修复补充免责声明及⾼危就医提示。
+MedOps Agent：基于 Harness 与 RAG 的医院⾏政协同系统 Agent Harness / Hybrid RAG
+技术栈：L angGraph、Agent DAG、Hybrid RAG、Milvus、BM25、RRF、Reranker、Redis、MongoDB、FastAPI、K8s、Prometheus
+可控 Agent Harness：采⽤确定性 DAG + 独⽴ Agent Runtime 分离控制与推理，由 Python 固定部⻔范围、执⾏路径、超时和回退策
+略，L L M 负责意图理解、改写和回答。
+Hybrid RAG：构建 BM25 + 向量召回 + RRF + Reranker 多阶段检索，并结合⽂档状态过滤与引⽤回填，避免旧版本制度进⼊回答。
+多 Agent 容错：设计关键词路由 + 语义路由 + 多部⻔并⾏调⽤，异常 Agent 通过共享检索和降级路径返回部分可⽤结果。
+答案质量⻔禁：构建 Generate-Verify-Rewrite 闭环，对证据⽀撑、引⽤⼀致性、关键信息遗漏及格式执⾏校验，并在有限预算内⾃动重
+写。
+M emory 与反馈闭环：使⽤ Redis + MongoDB 管理短期会话和⻓期业务记忆，将⽤户反馈、追问和校验结果关联 trace，⽤于 Skill /
+Rule 错误归因与优化。
+技能
+编程与后端 熟练使⽤ Python，具备 asyncio 异步并发、FastAPI、Pydantic、SSE 与结构化 API 开发经验；熟悉 MySQL 、Redis、
+Git、L inux、Docker。
+Agent 开发 熟悉 O penAI Function Calling、Agent L oop、ReAct、Plan-and-Execute、Skills-Agent、Agent Swarm；掌握任务分
+解、⼯具调度、上下⽂管理、并⾏协作与超时降级。
+RAG 与检索 熟悉多格式⽂档解析、语义 Chunking、Embedding、Dense/Sparse 混合检索、BM25/BM25F、RRF、Cross-Encoder
+Rerank、Milvus、Elasticsearch，以及 KGCC/KADS 与 Evidence Gate。
+L L M  Engineering 熟悉 Prompt / Context 约束、结构化⽣成、引⽤溯源、claim-evidence 核验和 Memory 设计；具备 L oRA 微调、模型量
+化与部署经验，了解 vL L M、O llama。
+AI 辅助开发 熟练使⽤ Codex、Claude Code 等⼯具进⾏原型验证、代码审查、测试补全与⼯程提效。
+赵艾 Agent 开发实习⽣
+电话：19383988442 邮箱：zhaoai0717@gmail.com
+年龄：23 政治⾯貌：共⻘团员

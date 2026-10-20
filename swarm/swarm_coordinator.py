@@ -9,6 +9,7 @@ SwarmCoordinator：Swarm 入口和智能路由
 类比：交通信号灯，决定车辆走哪条路，但不控制车辆如何行驶
 """
 import asyncio
+import os
 import uuid
 from datetime import datetime
 from typing import Dict, Any, Optional, List
@@ -95,6 +96,79 @@ class SwarmCoordinator:
 
             self._evidence_workflow = EvidenceFirstMedicalWorkflow(llm_client=self.llm_client)
         return self._evidence_workflow
+
+    async def _run_evidence_stage(
+        self,
+        question: str,
+        context: Optional[Dict[str, Any]],
+        route: Any,
+        agent_findings: Optional[List[Dict[str, Any]]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Run MedRGAG as a stage in the unified graph, not as a top-level route."""
+        route_data = route.to_dict() if hasattr(route, "to_dict") else dict(route or {})
+        if route_data.get("route") != "medical_evidence":
+            return None
+        try:
+            workflow = self._get_evidence_workflow()
+            evidence_timeout = max(5.0, float(os.getenv("MEDIX_MEDRGAG_TIMEOUT", "120")))
+
+            async def invoke_workflow():
+                try:
+                    return await workflow.run(
+                        question,
+                        context,
+                        agent_findings=agent_findings or [],
+                    )
+                except TypeError:
+                    # Compatibility for legacy workflow adapters and test doubles.
+                    return await workflow.run(question, context)
+
+            result = await asyncio.wait_for(invoke_workflow(), timeout=evidence_timeout)
+            result.setdefault("evidence_trace", {})["route"] = route_data
+            result["evidence_trace"]["agent_findings_count"] = len(agent_findings or [])
+            return result
+        except asyncio.TimeoutError:
+            logger.warning(
+                "MedRGAG evidence stage timed out after {}s; returning a safe degraded result",
+                os.getenv("MEDIX_MEDRGAG_TIMEOUT", "120"),
+            )
+            return {
+                "answer": (
+                    "## 当前无法给出可靠的医学结论\n\n"
+                    "MedRGAG 证据核验超时。为避免输出未经核验的医学事实，"
+                    "本次不提供推测性结论，请稍后重试或咨询医生、药师。"
+                ),
+                "mode": "evidence_augmented_timeout",
+                "agents_involved": ["medrgag_pipeline", "evidence_gate"],
+                "citations": [],
+                "evidence_trace": {
+                    "pipeline": "unified_medrgag",
+                    "route": route_data,
+                    "agent_findings_count": len(agent_findings or []),
+                    "evidence_gate": {"status": "refused", "reasons": ["MedRGAG 证据阶段超时"]},
+                },
+                "warnings": ["MedRGAG 证据阶段超时，已安全降级。"],
+                "disclaimer": "未完成证据核验，本次不提供医学结论。",
+            }
+        except Exception as exc:
+            logger.exception(f"MedRGAG evidence stage failed: {exc}")
+            return {
+                "answer": (
+                    "## 当前无法给出可靠的医学结论\n\n"
+                    "统一 Agent 流程已完成，但 MedRGAG 证据阶段暂时不可用。"
+                    "为避免无依据回答，本次不输出医学事实结论，请稍后重试或咨询医生、药师。"
+                ),
+                "mode": "evidence_augmented",
+                "agents_involved": ["medrgag_pipeline", "evidence_gate"],
+                "citations": [],
+                "evidence_trace": {
+                    "pipeline": "unified_medrgag",
+                    "route": route_data,
+                    "evidence_gate": {"status": "refused", "reasons": ["MedRGAG 证据阶段失败"]},
+                },
+                "warnings": [f"MedRGAG 证据阶段失败：{str(exc)[:300]}"],
+                "disclaimer": "未完成证据核验，本次不提供医学结论。",
+            }
 
     def _save_long_term_result(
         self,
@@ -194,35 +268,11 @@ class SwarmCoordinator:
             result["route_reason"] = query_route.reason
             self._save_long_term_result(session_id, question, result, "urgent_safety", start_time, user_id)
             return result
-        if query_route.route == "medical_evidence":
-            try:
-                result = await self._get_evidence_workflow().run(question, enhanced_context)
-            except Exception as exc:
-                logger.exception(f"Evidence-first workflow failed: {exc}")
-                result = {
-                    "answer": (
-                        "## 医学证据流程暂时不可用\n\n"
-                        "本次未能完成检索、KGCC、KADS 与证据核验。为避免无依据回答，系统没有输出医学结论。"
-                        "请稍后重试；如症状明显或正在进行用药决策，请及时咨询医生或药师。"
-                    ),
-                    "mode": "evidence_first",
-                    "swarm_enabled": False,
-                    "agents_involved": ["medrgag_pipeline"],
-                    "suggestions": ["稍后重试证据检索", "必要时咨询医生或药师"],
-                    "citations": [],
-                    "evidence_trace": {
-                        "pipeline": "evidence_first_medrgag",
-                        "evidence_gate": {"status": "refused", "reasons": ["证据流程执行失败"]},
-                    },
-                    "warnings": [f"证据流程失败：{str(exc)[:300]}"],
-                    "disclaimer": "未完成证据核验，本次不提供医学结论。",
-                    "error": str(exc),
-                }
-            result["session_id"] = session_id
-            result["route_reason"] = query_route.reason
-            result.setdefault("evidence_trace", {})["route"] = query_route.to_dict()
-            self._save_long_term_result(session_id, question, result, "evidence_first", start_time, user_id)
-            return result
+
+        # Routing now selects a policy, not a separate execution graph.  All
+        # non-urgent requests continue through LeadAgent and the Worker pool;
+        # MedRGAG 不参与任务拆解；它在 Worker 产出后、最终生成前运行。
+        enhanced_context["route_policy"] = query_route.to_dict()
 
         # Step 1: LeadAgent 分解任务
         assessment = await self.lead_agent.assess_and_decompose(question, enhanced_context)
@@ -233,6 +283,7 @@ class SwarmCoordinator:
         # Step 2: 根据任务数量路由
         final_answer = None
         mode = None
+        evidence_result = None
 
         if len(subtasks) == 1:
             # 单任务 → 直接调用对应 Agent
@@ -247,12 +298,50 @@ class SwarmCoordinator:
 
             logger.info(f"Route: Single Agent ({agent_id})")
             mode = "single_agent"
+            worker_context = dict(enhanced_context)
+            evidence_result = await self._run_evidence_stage(
+                question=question,
+                context=worker_context,
+                route=query_route,
+            )
+            if evidence_result is not None:
+                worker_context["medrgag_evidence"] = evidence_result
+                logger.info(
+                    "{}: pre-generation MedRGAG completed (citations={})",
+                    agent.agent_id,
+                    len(evidence_result.get("citations", [])),
+                )
             result = await agent.process({
                 'question': question,
-                'context': enhanced_context,
+                'context': worker_context,
                 'session_id': session_id
             })
             final_answer = result.get('answer', '')
+
+            if evidence_result is not None:
+                gate_status = (
+                    evidence_result.get("evidence_trace", {})
+                    .get("evidence_gate", {})
+                    .get("status")
+                )
+                result.update({
+                    "citations": evidence_result.get("citations", []),
+                    "evidence_trace": evidence_result.get("evidence_trace", {}),
+                    "warnings": evidence_result.get("warnings", []),
+                    "disclaimer": evidence_result.get("disclaimer", result.get("disclaimer", "")),
+                    "agents_involved": [agent.agent_id, *evidence_result.get("agents_involved", [])],
+                    "mode": "medrgag_guided_single",
+                })
+                # 证据门禁拒绝时，Agent 生成结果不能越过安全边界。
+                if gate_status == "refused":
+                    result["answer"] = evidence_result.get("answer", final_answer)
+                else:
+                    result["answer"] = await self.lead_agent.synthesize_single_result(
+                        question=question,
+                        agent_result=result,
+                        evidence=evidence_result,
+                    )
+                final_answer = result["answer"]
 
             result.update({
                 'swarm_enabled': False,
@@ -350,6 +439,8 @@ class SwarmCoordinator:
 
         # 创建 SharedContext
         shared_context = SharedContext(session_id=session_id)
+        shared_context.data["question"] = question
+        shared_context.data["agent_context"] = context or {}
 
         # 附加 SharedContext 到所有 Worker
         for worker in self.worker_pool:
@@ -377,16 +468,22 @@ class SwarmCoordinator:
             )
             tasks.append(task)
 
-        # 等待所有 Worker 完成（或超时）
+        # 等待所有 Worker 完成（或超时）。使用 asyncio.wait，避免
+        # wait_for(gather(...)) 在超时时整体取消并丢失已完成 Agent 的结果。
         timeout_occurred = False
-        try:
-            await asyncio.wait_for(
-                asyncio.gather(*tasks, return_exceptions=True),
-                timeout=90.0  # 增加超时时间到 90 秒，应对复杂案例
-            )
-        except asyncio.TimeoutError:
+        worker_timeout = max(30.0, float(os.getenv("MEDIX_WORKER_TIMEOUT", "180")))
+        done, pending = await asyncio.wait(tasks, timeout=worker_timeout)
+        for task in done:
+            try:
+                task.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                logger.warning(f"Worker task failed: {exc}")
+
+        if pending:
             timeout_occurred = True
-            logger.warning("Swarm execution timeout (90s)")
+            logger.warning("Swarm execution timeout ({}s)", worker_timeout)
             # 记录哪些 Agent 已完成，哪些未完成
             completed_agents = list(shared_context.agent_contributions.keys())
             claimed_tasks = [
@@ -396,14 +493,34 @@ class SwarmCoordinator:
             ]
             logger.info(f"Completed agents: {completed_agents}")
             logger.info(f"Timed out tasks: {claimed_tasks}")
+            # 保留 done 中的贡献后，再取消未完成任务，避免后台任务继续占用
+            # LLM、Milvus 和网络连接。
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        # Worker 先完成分析，MedRGAG 再基于这些结果检索和核验；最后由
+        # LeadAgent 使用核验后的证据生成最终回答。
+        route_policy = (context or {}).get("route_policy", {})
+        evidence_result = self._collect_worker_evidence(shared_context)
 
         # Step 3: LeadAgent 汇总结果
         # 即使超时，也尝试汇总已完成的部分结果
         final_answer = await self.lead_agent.synthesize_results(
             question=question,
             shared_context=shared_context,
-            timeout_occurred=timeout_occurred
+            timeout_occurred=timeout_occurred,
+            evidence=evidence_result,
         )
+        # 证据门禁拒绝时，不能让 LeadAgent 用自由生成内容覆盖安全降级。
+        if evidence_result:
+            gate_status = (
+                evidence_result.get("evidence_trace", {})
+                .get("evidence_gate", {})
+                .get("status")
+            )
+            if gate_status == "refused":
+                final_answer = evidence_result.get("answer", final_answer)
 
         end_time = datetime.now()
 
@@ -475,6 +592,11 @@ class SwarmCoordinator:
 
         # 提取建议和免责声明（简化实现）
         result['suggestions'] = self._extract_suggestions(final_answer)
+        if evidence_result:
+            result['citations'] = evidence_result.get('citations', [])
+            result['evidence_trace'] = evidence_result.get('evidence_trace', {})
+            result['warnings'] = evidence_result.get('warnings', [])
+            result['agents_involved'].extend(evidence_result.get('agents_involved', []))
 
         # 根据是否超时调整免责声明
         if timeout_occurred and not completed_agents:
@@ -483,6 +605,16 @@ class SwarmCoordinator:
             result['disclaimer'] = f"以上分析基于 {len(completed_agents)} 个 Agent 的部分协作结果（部分分析模块超时未完成），仅供参考，不能替代医生诊断。"
         else:
             result['disclaimer'] = "以上分析基于多个专业 Agent 的协作，仅供参考，不能替代医生诊断。"
+        if evidence_result:
+            gate_status = (
+                evidence_result.get("evidence_trace", {})
+                .get("evidence_gate", {})
+                .get("status")
+            )
+            if gate_status == "refused":
+                result['disclaimer'] = evidence_result.get(
+                    'disclaimer', result['disclaimer']
+                )
 
         return result
 
@@ -527,11 +659,86 @@ class SwarmCoordinator:
     async def _execute_single_subtask(self, worker, subtask, shared_context):
         """执行单个子任务"""
         try:
-            result = await worker.process_subtask(subtask)
+            agent_context = shared_context.data.get("agent_context", {})
+            worker_context = dict(agent_context)
+            route = worker_context.get("route_policy", {})
+            worker_evidence = None
+            if route:
+                # 关键顺序：先为当前子任务准备证据，再让 Worker 生成分析。
+                worker_evidence = await self._run_evidence_stage(
+                    question=subtask.description,
+                    context=worker_context,
+                    route=route,
+                )
+                if worker_evidence is not None:
+                    worker_context["medrgag_evidence"] = worker_evidence
+                    logger.info(
+                        "{}: pre-generation MedRGAG completed for {} (citations={})",
+                        worker.agent_id,
+                        subtask.type,
+                        len(worker_evidence.get("citations", [])),
+                    )
+            try:
+                result = await worker.process_subtask(subtask, context=worker_context)
+            except TypeError:
+                # 兼容旧 Worker 适配器。
+                result = await worker.process_subtask(subtask)
+
+            # 证据包随贡献写入 SharedContext，供 LeadAgent 最终融合。
+            if worker_evidence is not None:
+                result = dict(result)
+                result["medrgag_evidence"] = worker_evidence
+                result["citations"] = worker_evidence.get("citations", [])
+                result["evidence_trace"] = worker_evidence.get("evidence_trace", {})
+                result["evidence_warnings"] = worker_evidence.get("warnings", [])
             shared_context.complete_subtask(subtask.id, worker.agent_id, result)
             logger.info(f"{worker.agent_id}: Completed {subtask.type}")
         except Exception as e:
             logger.error(f"{worker.agent_id}: Error in {subtask.type}: {e}")
+
+    @staticmethod
+    def _collect_worker_evidence(shared_context: SharedContext) -> Optional[Dict[str, Any]]:
+        """Fuse per-Worker MedRGAG packages without running a duplicate RAG pass."""
+        packages = []
+        citations = []
+        warnings = []
+        seen_ids = set()
+        for contribution in shared_context.get_contributions():
+            package = (contribution.result or {}).get("medrgag_evidence")
+            if not package:
+                continue
+            packages.append({
+                "agent_id": contribution.agent_id,
+                "subtask_id": contribution.subtask_id,
+                "answer": package.get("answer", ""),
+                "evidence_trace": package.get("evidence_trace", {}),
+            })
+            warnings.extend(package.get("warnings", []))
+            for citation in package.get("citations", []):
+                citation_id = citation.get("id") if isinstance(citation, dict) else str(citation)
+                if citation_id not in seen_ids:
+                    seen_ids.add(citation_id)
+                    citations.append(citation)
+        if not packages:
+            return None
+        refused = all(
+            item.get("evidence_trace", {}).get("evidence_gate", {}).get("status") == "refused"
+            for item in packages
+        )
+        return {
+            "answer": "\n\n".join(item["answer"] for item in packages if item["answer"]),
+            "citations": citations,
+            "warnings": warnings,
+            "evidence_trace": {
+                "pipeline": "worker_medrgag_fusion",
+                "worker_packages": packages,
+                "evidence_gate": {
+                    "status": "refused" if refused else "passed",
+                    "worker_count": len(packages),
+                },
+            },
+            "agents_involved": ["worker_medrgag", "evidence_gate"],
+        }
 
     def _extract_suggestions(self, final_answer: str) -> List[str]:
         """从最终答案中提取建议（简化实现）"""

@@ -1,0 +1,56 @@
+--- PAGE 1 ---
+姓名：赵艾 求职方向：Agent 开发实习生
+电话： 19383988442 政治面貌： 共青团员
+年龄： 23 邮箱： zhaoai0717@gmail.com
+教育背景
+2025.09–2028.06 西南石油大学（双一流） 计算机技术｜硕士
+2021.09–2025.06 四川轻化工大学 电子商务｜本科
+实习经历
+2026.04–2026.08 北京睿立方医信科技有限公司成都分公司 Agent 开发实习生
+• 医学知识库构建：负责多源异构医学文档解析采集、智能语义切片 、知识标注与元数据抽取、向量化检索及混合召回 /
+Rerank ，支撑医学问答与 Agent 检索增强 ；设计基于医院/科室/角色/文档密级的权限隔离机制，保障数据合规。
+• 医院感染分析工作流搭建：搭建疑似感染辅助分析 Agent 工作流 ， 串联病例信息抽取、指南知识检索 、 规则判断、LLM
+推理 与建议生成，辅助输出感染诊断依据、鉴别要点和防控建议，提升院感分析效率与可追溯性。
+项目经历
+MedAgent：多智能体医疗咨询与辅助诊断系统
+• 技术栈： LangGraph、RAG、ReAct、Agent Swarm、Mem0、FastAPI、Pydantic、SSE、Harness Engineering。
+• 项目描述：面向复杂医疗问答与辅助诊断场景，构建基于 Multi-Agent + Skills 的医疗智能体，解决传统单轮问答上
+下文依赖弱、复杂问题拆解不足及医学知识约束不足的问题。
+▶ 多 Agent 编排：基于 LangGraph 构建 Skills-Agent 两层架构 ：底层封装7 个独立 Skills ，上层由健康咨询、症状诊
+断、医学研究 3 类专业 Agent 根据任务自主选择所需 Skills，实现 Agent 与能力模块解耦。
+▶ ReAct + Skill 调度：引入 Think-Act-Observe / ReAct 执行循环，由 LLM 根据任务自主选择并执行对应 医学 Skills
+，形成“任务分析—Skill 执行—结果观察—迭代修正”的处理闭环，单 Agent 平均响应时间控制在 15 秒以内。
+▶ 智能路由与 Agent Swarm：基于 问题复杂度识别 + 智能路由 完成 Agent 分发，复杂问题自动拆解并切换至 Agent
+Swarm 协作模式，由多个 Agent 并行执行子任务，并通过共享上下文同步任务状态与执行结果。
+▶ 会话记忆：构建 短期会话记忆 + Mem0 长期记忆 的双层 Memory；短期层由所有 Agent 共享最近 5 轮会话，并通过
+熵管理器 进行消息去重与压缩，减少约 35% 上下文冗余；长期层通过 Mem0 向量化存储会话总结，支持跨会话历史
+信息与相似案例检索。
+▶ Harness Engineering：通过 YAML 声明式配置定义 Agent 能力边界、可用 Skills 与执行约束，并在运行时自动校验；
+设计输出校验与自动修复机制，对缺失免责声明的回答自动补全提示，对检测到高危症状的结果自动追加就医警告，降
+低医疗场景下的越界执行与高风险输出。
+MedOps Agent：基于 Harness 与 RAG 的医院行政协同系统
+• 技术栈： LangGraph、Agent DAG、Hybrid RAG、Milvus、BM25、RRF、Reranker、Redis、MongoDB、FastAPI、
+K8s、Prometheus。
+• 项目描述：面向医院医务、人事、财务、后勤等跨科室行政场景，构建Agent Harness + RAG 协同平台，实现制度查
+询、办事清单生成和跨科室流程导航，解决医院行政知识分散、流程跨部门且结果难追溯的问题。
+▶ 可控 Agent Harness：采用 确定性 DAG + 独立 Agent Runtime 分离控制与推理：由 Python 固定部门范围、执行
+路径、超时和回退策略，LLM 仅负责意图理解、改写和回答，解决纯 LLM 自主规划难控制、难审计、难降级的问题。
+▶ Hybrid RAG：构建 BM25 + 向量召回 + RRF + Reranker 多阶段检索链路，并结合 文档状态过滤与引用回填 阻止旧
+版本制度进入回答，解决医院行政问答中精确术语召回不足和引用不可追溯的问题。
+▶ 多 Agent 路由与容错：设计 关键词路由 + 语义路由 + 多部门并行调用 机制，对异常 Agent 通过共享检索和降级路径
+返回部分可用结果，解决跨科室流程中单节点超时导致整体链路失败的问题。
+▶ 答案质量门禁：构建 Generate-Verify-Rewrite 闭环， 对回答执行证据支撑、 引用一致性、 关键信息遗漏与格式校验；
+失败时在有限预算内自动重写，降低无依据回答与引用错配风险。
+▶ Memory 与反馈闭环：使用 Redis + MongoDB 管理短期会话与长期业务记忆，并将用户反馈、追问和校验结果关联
+trace 进行错误归因，为 Skill / Rule 优化提供数据，解决多轮上下文丢失与系统问题难沉淀的问题。
+技能
+• 编程语言：熟练使用 Python ，具备 异步并发与 FastAPI 后端开发 经验。
+• Agent 开发：熟练使用 LangChain、LangGraph 进行任务规划、Function Calling、 上下文管理、 工作流编排与Multi-
+Agent 协作；熟悉 ReAct、Plan-and-Execute、AutoGen 等范式。
+• RAG 与检索：熟悉多源文档解析、 语义Chunking、Embedding、Dense/Sparse 混合检索、BM25/BM25F、RRF、Cross-
+Encoder Rerank ；熟悉 Milvus、Elasticsearch。
+• LLM Engineering：熟悉 Prompt / Context 约束、结构化生成 及 “生成-编译验证-反馈”闭环 ；具备 LoRA 微调、
+模型量化与部署经验，了解 vLLM、Ollama 等推理部署方案。
+• 后端与工程：熟悉 MySQL、Redis、Git、Linux、Docker ；掌握 Java 集合、JUC、JVM 基础，具备前后端工程开发与
+异步服务实践经验。
+• AI 辅助开发：熟练使用 Codex、Claude Code 等工具进行快速原型与工程提效。

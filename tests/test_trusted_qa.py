@@ -66,6 +66,26 @@ class FakeEvidenceWorkflow:
         }
 
 
+class FakeLeadAgent:
+    async def assess_and_decompose(self, question, context=None):
+        return {
+            "subtasks": [{
+                "description": "回答医学问题",
+                "assigned_agent": "consultation_agent",
+            }]
+        }
+
+    async def synthesize_single_result(self, question, agent_result, evidence):
+        return f"基于证据：{evidence.get('answer', '')}"
+
+
+class FakeWorker:
+    agent_id = "consultation_agent"
+
+    async def process(self, payload):
+        return {"answer": "Agent 初步回答"}
+
+
 class TrustedQATests(unittest.TestCase):
     def test_deterministic_router_forces_medical_questions(self):
         self.assertEqual(classify_query("高血压应该如何治疗？").route, "medical_evidence")
@@ -122,16 +142,21 @@ class TrustedQATests(unittest.TestCase):
         self.assertEqual(result["suggestions"], [])
         self.assertEqual(result["evidence_trace"]["evidence_gate"]["status"], "degraded")
 
-    def test_coordinator_cannot_skip_evidence_workflow(self):
+    def test_coordinator_runs_agents_before_evidence_workflow(self):
         coordinator = object.__new__(SwarmCoordinator)
         coordinator.enable_swarm = True
         coordinator.short_term_memory = FakeMemory()
         coordinator.long_term_memory = FakeMemory()
         coordinator._evidence_workflow = FakeEvidenceWorkflow()
+        coordinator.lead_agent = FakeLeadAgent()
+        coordinator.consultation_agent = FakeWorker()
+        coordinator.diagnostic_agent = FakeWorker()
+        coordinator.research_agent = FakeWorker()
         result = asyncio.run(coordinator.process("什么是高血压？", session_id="route-test"))
-        self.assertEqual(result["mode"], "evidence_first")
+        self.assertEqual(result["mode"], "medrgag_guided_single")
         self.assertEqual(len(coordinator._evidence_workflow.calls), 1)
         self.assertEqual(result["evidence_trace"]["route"]["route"], "medical_evidence")
+        self.assertIn("consultation_agent", result["agents_involved"])
 
 
 if __name__ == "__main__":
